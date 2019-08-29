@@ -227,7 +227,7 @@ else()
     if (UNIX)
       add_sanitizer_rt_version_list(clang_rt.asan-dynamic-${arch}
                                     LIBS clang_rt.asan-${arch} clang_rt.asan_cxx-${arch}
-                                    EXTRA asan.syms.extra)
+                                    EXTRA asan.syms.extra ../sanitizer_common/common_san.syms.extra)
       set(VERSION_SCRIPT_FLAG
            -Wl,--version-script,${CMAKE_CURRENT_BINARY_DIR}/clang_rt.asan-dynamic-${arch}.vers)
       # The Solaris 11.4 linker supports a subset of GNU ld version scripts,
@@ -284,8 +284,8 @@ else()
         ARCHS ${arch})
       add_dependencies(asan clang_rt.asan_cxx-${arch}-symbols)
       add_sanitizer_rt_symbols(clang_rt.asan
-        ARCHS ${arch}
-        EXTRA asan.syms.extra)
+        ARCHS ${arch} 
+        EXTRA asan.syms.extra ../sanitizer_common/common_san.syms.extra)
       add_dependencies(asan clang_rt.asan-${arch}-symbols)
     endif()
 

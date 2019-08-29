@@ -247,11 +247,11 @@ else()
       add_sanitizer_rt_symbols(clang_rt.ubsan_standalone
         ARCHS ${ARCHS_FOR_SYMBOLS}
         PARENT_TARGET ubsan
-        EXTRA ubsan.syms.extra)
+        EXTRA ubsan.syms.extra ../sanitizer_common/common_san.syms.extra)
       add_sanitizer_rt_symbols(clang_rt.ubsan_standalone_cxx
         ARCHS ${ARCHS_FOR_SYMBOLS}
         PARENT_TARGET ubsan
-        EXTRA ubsan.syms.extra)
+        EXTRA ubsan.syms.extra ../sanitizer_common/common_san.syms.extra)
     endif()
   endif()
 endif()
