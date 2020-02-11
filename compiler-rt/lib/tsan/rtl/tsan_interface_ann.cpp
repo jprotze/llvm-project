@@ -233,6 +233,18 @@ void INTERFACE_ATTRIBUTE AnnotateHappensAfter(char *f, int l, uptr addr) {
   Acquire(thr, pc, addr);
 }
 
+#if !defined(TSAN_NO_LOCAL_CONCURRENCY)
+void INTERFACE_ATTRIBUTE AnnotateInitTLC(char *f, int l, uptr addr) {
+  SCOPED_ANNOTATION(AnnotateHappensBefore);
+  ReleaseStore(thr, pc, addr);
+}
+
+void INTERFACE_ATTRIBUTE AnnotateStartTLC(char *f, int l, uptr addr) {
+  SCOPED_ANNOTATION(AnnotateHappensAfter);
+  StartConcurrent(thr, pc, addr);
+}
+#endif
+
 void INTERFACE_ATTRIBUTE AnnotateCondVarSignal(char *f, int l, uptr cv) {
   SCOPED_ANNOTATION(AnnotateCondVarSignal);
 }

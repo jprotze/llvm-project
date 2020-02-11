@@ -202,6 +202,10 @@ void MutexPostLock(ThreadState *thr, uptr pc, uptr addr, u32 flagz, int rec) {
   s->mtx.Unlock();
   // Can't touch s after this point.
   s = 0;
+#if !defined(TSAN_NO_LOCAL_CONCURRENCY)
+  thr->begin_concurrent.epoch = 0;
+  thr->end_concurrent.epoch = 0;
+#endif
   if (report_double_lock)
     ReportMutexMisuse(thr, pc, ReportTypeMutexDoubleLock, addr, mid);
   if (first && pre_lock && common_flags()->detect_deadlocks) {
@@ -297,6 +301,10 @@ void MutexPostReadLock(ThreadState *thr, uptr pc, uptr addr, u32 flagz) {
   s->mtx.ReadUnlock();
   // Can't touch s after this point.
   s = 0;
+#if !defined(TSAN_NO_LOCAL_CONCURRENCY)
+  thr->begin_concurrent.epoch = 0;
+  thr->end_concurrent.epoch = 0;
+#endif
   if (report_bad_lock)
     ReportMutexMisuse(thr, pc, ReportTypeMutexBadReadLock, addr, mid);
   if (pre_lock  && common_flags()->detect_deadlocks) {
@@ -409,7 +417,24 @@ void Acquire(ThreadState *thr, uptr pc, uptr addr) {
     return;
   AcquireImpl(thr, pc, &s->clock);
   s->mtx.ReadUnlock();
+#if !defined(TSAN_NO_LOCAL_CONCURRENCY)
+  thr->begin_concurrent.epoch = 0;
+  thr->end_concurrent.epoch = 0;
+#endif
 }
+
+#if !defined(TSAN_NO_LOCAL_CONCURRENCY)
+void StartConcurrent(ThreadState *thr, uptr pc, uptr addr) {
+  DPrintf("#%d: Acquire %zx\n", thr->tid, addr);
+  if (thr->ignore_sync)
+    return;
+  SyncVar *s = ctx->metamap.GetIfExistsAndLock(addr, false);
+  if (!s)
+    return;
+  StartConcurrentImpl(thr, pc, &s->clock);
+  s->mtx.ReadUnlock();
+}
+#endif
 
 static void UpdateClockCallback(ThreadContextBase *tctx_base, void *arg) {
   ThreadState *thr = reinterpret_cast<ThreadState*>(arg);
@@ -491,6 +516,26 @@ void AfterSleep(ThreadState *thr, uptr pc) {
 void AcquireImpl(ThreadState *thr, uptr pc, SyncClock *c) {
   if (thr->ignore_sync)
     return;
+#if !defined(TSAN_NO_LOCAL_CONCURRENCY)
+#if 0
+  if (c->size() > (uptr)thr->tid)
+  {
+    if (thr->end_concurrent.epoch < c->get(thr->tid))
+    {
+      thr->begin_concurrent.epoch = 0;
+      thr->end_concurrent.epoch = 0;
+    } else {
+      if (thr->begin_concurrent.epoch < c->get(thr->tid))
+        thr->begin_concurrent.epoch = c->get(thr->tid);
+    }
+  }
+  else
+  {
+    thr->begin_concurrent.epoch = 0;
+    thr->end_concurrent.epoch = 0;
+  }
+#endif
+#endif
   thr->clock.set(thr->fast_state.epoch());
   thr->clock.acquire(&thr->proc()->clock_cache, c);
   StatInc(thr, StatSyncAcquire);
@@ -504,6 +549,18 @@ void ReleaseStoreAcquireImpl(ThreadState *thr, uptr pc, SyncClock *c) {
   thr->clock.releaseStoreAcquire(&thr->proc()->clock_cache, c);
   StatInc(thr, StatSyncReleaseStoreAcquire);
 }
+
+#if !defined(TSAN_NO_LOCAL_CONCURRENCY)
+void StartConcurrentImpl(ThreadState *thr, uptr pc, SyncClock *c) {
+  if (thr->ignore_sync)
+    return;
+  thr->begin_concurrent.epoch = c->get(thr->tid);
+  thr->end_concurrent.epoch = thr->fast_state.epoch();
+  thr->clock.AcquireStore(&thr->proc()->clock_cache, c);
+  thr->clock.set(thr->end_concurrent.epoch);
+  StatInc(thr, StatSyncAcquire);
+}
+#endif
 
 void ReleaseImpl(ThreadState *thr, uptr pc, SyncClock *c) {
   if (thr->ignore_sync)

@@ -646,6 +646,14 @@ static inline bool HappensBefore(Shadow old, ThreadState *thr) {
   return thr->clock.get(old.TidWithIgnore()) >= old.epoch();
 }
 
+#if !defined(TSAN_NO_LOCAL_CONCURRENCY)
+static inline bool HappensConcurrently(Shadow old, ThreadState *thr) {
+  // end_concurrent = 0 if no thread-local concurrency
+  return thr->end_concurrent.epoch >= old.epoch() &&
+         thr->begin_concurrent.epoch <= old.epoch();
+}
+#endif
+
 ALWAYS_INLINE
 void MemoryAccessImpl1(ThreadState *thr, uptr addr,
     int kAccessSizeLog, bool kAccessIsWrite, bool kIsAtomic,

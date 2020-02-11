@@ -229,6 +229,66 @@ void ThreadClock::releaseStoreAcquire(ClockCache *c, SyncClock *sc) {
   }
 }
 
+#if !defined(TSAN_NO_LOCAL_CONCURRENCY)
+void ThreadClock::AcquireStore(ClockCache *c, SyncClock *src) {
+  DCHECK_LE(nclk_, kMaxTid);
+  DCHECK_LE(src->size_, kMaxTid);
+  CPP_STAT_INC(StatClockAcquire);
+
+  // Check if it's empty -> no need to do anything.
+  const uptr nclk = src->size_;
+  if (nclk == 0) {
+    CPP_STAT_INC(StatClockAcquireEmpty);
+    return;
+  }
+
+  // Check if we've already acquired src after the last release operation on src
+  bool acquired = false;
+  /*  if (nclk > tid_) {
+      CPP_STAT_INC(StatClockAcquireLarge);
+      if (src->elem(tid_).reused == reused_) {
+        CPP_STAT_INC(StatClockAcquireRepeat);
+        for (unsigned i = 0; i < kDirtyTids; i++) {
+          unsigned tid = src->dirty_tids_[i];
+          if (tid != kInvalidTid) {
+            u64 epoch = src->elem(tid).epoch;
+            if (clk_[tid].epoch != epoch) {
+              clk_[tid].epoch = epoch;
+              acquired = true;
+            }
+          }
+        }
+        if (acquired) {
+          CPP_STAT_INC(StatClockAcquiredSomething);
+          last_acquire_ = clk_[tid_].epoch;
+        }
+        return;
+      }
+    }*/
+
+  // O(N) acquire.
+  CPP_STAT_INC(StatClockAcquireFull);
+  nclk_ = max(nclk_, nclk);
+  u64 *dst_pos = &clk_[0];
+  for (ClockElem &src_elem : *src) {
+    u64 epoch = src_elem.epoch;
+    if (*dst_pos < epoch) {
+      *dst_pos = epoch;
+      acquired = true;
+    }
+    dst_pos++;
+  }
+
+  // Remember that this thread has acquired this clock.
+  if (nclk > tid_)
+    src->elem(tid_).reused = reused_;
+  if (acquired) {
+    CPP_STAT_INC(StatClockAcquiredSomething);
+    last_acquire_ = clk_[tid_];
+  }
+}
+#endif
+
 void ThreadClock::release(ClockCache *c, SyncClock *dst) {
   DCHECK_LE(nclk_, kMaxTid);
   DCHECK_LE(dst->size_, kMaxTid);
