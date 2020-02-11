@@ -48,13 +48,15 @@ public:
   int print_max_rss;
   int verbose;
   int enabled;
+  int no_tlc;
 
   ArcherFlags(const char *env)
       :
 #if (LLVM_VERSION) >= 40
         flush_shadow(0),
 #endif
-        print_max_rss(0), verbose(0), enabled(1) {
+        print_ompt_counters(0), print_max_rss(0), verbose(0), enabled(1),
+        no_tlc(0) {
     if (env) {
       std::vector<std::string> tokens;
       std::string token;
@@ -74,6 +76,8 @@ public:
         if (sscanf(it->c_str(), "verbose=%d", &verbose))
           continue;
         if (sscanf(it->c_str(), "enable=%d", &enabled))
+          continue;
+        if (sscanf(it->c_str(), "no_tlc_analysis=%d", &no_tlc))
           continue;
         std::cerr << "Illegal values for ARCHER_OPTIONS variable: " << token
                   << std::endl;
@@ -216,18 +220,30 @@ void __attribute__((weak)) __tsan_func_exit(void) {}
 // This marker defines the destination of a happens-before arc.
 #define TsanHappensAfter(cv) AnnotateHappensAfter(__FILE__, __LINE__, cv)
 
+// convenience macros to handle the conditional annotation w/ or w/o TLC
+#define IfTLCBefore(f, cv)                                                     \
+  if (archer_flags->no_tlc)                                                    \
+    AnnotateHappensBefore(__FILE__, __LINE__, cv);                             \
+  else                                                                         \
+    f(__FILE__, __LINE__, cv)
+
+#define IfTLCAfter(f, cv)                                                      \
+  if (archer_flags->no_tlc)                                                    \
+    AnnotateHappensAfter(__FILE__, __LINE__, cv);                              \
+  else                                                                         \
+    f(__FILE__, __LINE__, cv)
+
 // This marker defines the source of a TLC aware happens-before arc.
-#define TsanHappensBeforeTLC(cv)                                               \
-  AnnotateHappensBeforeTLC(__FILE__, __LINE__, cv)
+#define TsanHappensBeforeTLC(cv) IfTLCBefore(AnnotateHappensBeforeTLC, cv)
 
 // This marker defines the destination of a TLC aware happens-before arc.
-#define TsanHappensAfterTLC(cv) AnnotateHappensAfterTLC(__FILE__, __LINE__, cv)
+#define TsanHappensAfterTLC(cv) IfTLCAfter(AnnotateHappensAfterTLC, cv)
 
 // This marker defines the initialization of TLC execution.
-#define TsanInitTLC(cv) AnnotateInitTLC(__FILE__, __LINE__, cv)
+#define TsanInitTLC(cv) IfTLCBefore(AnnotateInitTLC, cv)
 
 // This marker defines the start of TLC execution.
-#define TsanStartTLC(cv) AnnotateStartTLC(__FILE__, __LINE__, cv)
+#define TsanStartTLC(cv) IfTLCAfter(AnnotateStartTLC, cv)
 
 // Ignore any races on writes between here and the next TsanIgnoreWritesEnd.
 #define TsanIgnoreWritesBegin() AnnotateIgnoreWritesBegin(__FILE__, __LINE__)
@@ -962,7 +978,7 @@ ompt_start_tool_result_t *ompt_start_tool(unsigned int omp_version,
   runOnTsan=1;
   RunningOnValgrind();
   if (!runOnTsan) // if we are not running on TSAN, give a different tool the
-    // chance to be loaded
+  // chance to be loaded
   {
     if (archer_flags->verbose)
       std::cout << "Archer detected OpenMP application without TSan "
@@ -972,9 +988,15 @@ ompt_start_tool_result_t *ompt_start_tool(unsigned int omp_version,
     return NULL;
   }
 
-  if (archer_flags->verbose)
+  if (archer_flags->verbose) {
     std::cout << "Archer detected OpenMP application with TSan, supplying "
                  "OpenMP synchronization semantics"
               << std::endl;
+    if (archer_flags->no_tlc) {
+      std::cout << "Running in non-TLC mode" << std::endl;
+    } else {
+      std::cout << "Running in TLC mode" << std::endl;
+    }
+  }
   return &ompt_start_tool_result;
 }
