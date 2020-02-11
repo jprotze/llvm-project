@@ -177,6 +177,22 @@ AnnotateHappensAfter(const char *file, int line, const volatile void *cv) {}
 void __attribute__((weak))
 AnnotateHappensBefore(const char *file, int line, const volatile void *cv) {}
 void __attribute__((weak))
+AnnotateHappensAfterTLC(const char *file, int line, const volatile void *cv) {
+  AnnotateHappensAfter(file, line, cv);
+}
+void __attribute__((weak))
+AnnotateHappensBeforeTLC(const char *file, int line, const volatile void *cv) {
+  AnnotateHappensBefore(file, line, cv);
+}
+void __attribute__((weak))
+AnnotateInitTLC(const char *file, int line, const volatile void *cv) {
+  AnnotateHappensBefore(file, line, cv);
+}
+void __attribute__((weak))
+AnnotateStartTLC(const char *file, int line, const volatile void *cv) {
+  AnnotateHappensAfter(file, line, cv);
+}
+void __attribute__((weak))
 AnnotateIgnoreWritesBegin(const char *file, int line) {}
 void __attribute__((weak)) AnnotateIgnoreWritesEnd(const char *file, int line) {
 }
@@ -199,6 +215,19 @@ void __attribute__((weak)) __tsan_func_exit(void) {}
 
 // This marker defines the destination of a happens-before arc.
 #define TsanHappensAfter(cv) AnnotateHappensAfter(__FILE__, __LINE__, cv)
+
+// This marker defines the source of a TLC aware happens-before arc.
+#define TsanHappensBeforeTLC(cv)                                               \
+  AnnotateHappensBeforeTLC(__FILE__, __LINE__, cv)
+
+// This marker defines the destination of a TLC aware happens-before arc.
+#define TsanHappensAfterTLC(cv) AnnotateHappensAfterTLC(__FILE__, __LINE__, cv)
+
+// This marker defines the initialization of TLC execution.
+#define TsanInitTLC(cv) AnnotateInitTLC(__FILE__, __LINE__, cv)
+
+// This marker defines the start of TLC execution.
+#define TsanStartTLC(cv) AnnotateStartTLC(__FILE__, __LINE__, cv)
 
 // Ignore any races on writes between here and the next TsanIgnoreWritesEnd.
 #define TsanIgnoreWritesBegin() AnnotateIgnoreWritesBegin(__FILE__, __LINE__)
@@ -698,7 +727,7 @@ static void ompt_tsan_task_create(
     // Use the newly created address. We cannot use a single address from the
     // parent because that would declare wrong relationships with other
     // sibling tasks that may be created before this task is started!
-    TsanHappensBefore(Data->GetTaskPtr());
+    TsanInitTLC(Data->GetTaskPtr());
     ToTaskData(parent_task_data)->execution++;
   }
 }
@@ -727,7 +756,7 @@ static void ompt_tsan_task_schedule(ompt_data_t *first_task_data,
   if (ToTask->execution == 0) {
     ToTask->execution++;
     // 1. Task will begin execution after it has been created.
-    TsanHappensAfter(ToTask->GetTaskPtr());
+    TsanStartTLC(ToTask->GetTaskPtr());
     for (unsigned i = 0; i < ToTask->DependencyCount; i++) {
       ompt_dependence_t *Dependency = &ToTask->Dependencies[i];
 
@@ -739,7 +768,7 @@ static void ompt_tsan_task_schedule(ompt_data_t *first_task_data,
     }
   } else {
     // 2. Task will resume after it has been switched away.
-    TsanHappensAfter(ToTask->GetTaskPtr());
+    TsanStartTLC(ToTask->GetTaskPtr());
   }
 
   if (prior_task_status != ompt_task_complete) {
@@ -749,7 +778,7 @@ static void ompt_tsan_task_schedule(ompt_data_t *first_task_data,
   }
 
   // Task may be resumed at a later point in time.
-  TsanHappensBefore(FromTask->GetTaskPtr());
+  TsanInitTLC(FromTask->GetTaskPtr());
 
   if (hasReductionCallback < ompt_set_always && FromTask->InBarrier) {
     // We want to ignore writes in the runtime code during barriers,
