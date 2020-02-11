@@ -48,7 +48,8 @@ public:
   int print_max_rss;
   int verbose;
   int enabled;
-  int no_tlc;
+  int use_tlc;
+  int use_fibers;
 
   ArcherFlags(const char *env)
       :
@@ -56,7 +57,7 @@ public:
         flush_shadow(0),
 #endif
         print_ompt_counters(0), print_max_rss(0), verbose(0), enabled(1),
-        no_tlc(0) {
+        use_tlc(0), use_fibers(0) {
     if (env) {
       std::vector<std::string> tokens;
       std::string token;
@@ -75,9 +76,11 @@ public:
           continue;
         if (sscanf(it->c_str(), "verbose=%d", &verbose))
           continue;
+        if (sscanf(it->c_str(), "use_fibers=%d", &use_fibers))
+          continue;
         if (sscanf(it->c_str(), "enable=%d", &enabled))
           continue;
-        if (sscanf(it->c_str(), "no_tlc_analysis=%d", &no_tlc))
+        if (sscanf(it->c_str(), "use_tlc=%d", &use_tlc))
           continue;
         std::cerr << "Illegal values for ARCHER_OPTIONS variable: " << token
                   << std::endl;
@@ -209,6 +212,11 @@ int __attribute__((weak)) RunningOnValgrind() {
 }
 void __attribute__((weak)) __tsan_func_entry(const void *call_pc) {}
 void __attribute__((weak)) __tsan_func_exit(void) {}
+
+void __attribute__((weak)) *__tsan_get_current_fiber() {printf("__tsan_get_current_fiber\n");return nullptr;}
+void __attribute__((weak)) *__tsan_create_fiber(unsigned flags) {printf("__tsan_create_fiber\n");return nullptr;}
+void __attribute__((weak)) __tsan_destroy_fiber(void *fiber) {printf("__tsan_destroy_fiber\n");}
+void __attribute__((weak)) __tsan_switch_to_fiber(void *fiber, unsigned flags) {printf("__tsan_switch_to_fiber\n");}
 #endif
 }
 
@@ -222,13 +230,13 @@ void __attribute__((weak)) __tsan_func_exit(void) {}
 
 // convenience macros to handle the conditional annotation w/ or w/o TLC
 #define IfTLCBefore(f, cv)                                                     \
-  if (archer_flags->no_tlc)                                                    \
+  if (!archer_flags->use_tlc)                                                    \
     AnnotateHappensBefore(__FILE__, __LINE__, cv);                             \
   else                                                                         \
     f(__FILE__, __LINE__, cv)
 
 #define IfTLCAfter(f, cv)                                                      \
-  if (archer_flags->no_tlc)                                                    \
+  if (!archer_flags->use_tlc)                                                    \
     AnnotateHappensAfter(__FILE__, __LINE__, cv);                              \
   else                                                                         \
     f(__FILE__, __LINE__, cv)
@@ -465,27 +473,41 @@ struct TaskData {
 
   int execution;
   int freed;
+  
+  void* fiber;
 
   TaskData(TaskData *Parent)
       : InBarrier(false), Included(false), BarrierIndex(0), RefCount(1),
         Parent(Parent), ImplicitTask(nullptr), Team(Parent->Team),
-        TaskGroup(nullptr), DependencyCount(0), execution(0), freed(0) {
+        TaskGroup(nullptr), DependencyCount(0), execution(0), freed(0), fiber(nullptr) {
     if (Parent != nullptr) {
       Parent->RefCount++;
       // Copy over pointer to taskgroup. This task may set up its own stack
       // but for now belongs to its parent's taskgroup.
       TaskGroup = Parent->TaskGroup;
+      if (archer_flags->use_fibers)
+        fiber = __tsan_create_fiber(0);
     }
   }
 
   TaskData(ParallelData *Team = nullptr)
       : InBarrier(false), Included(false), BarrierIndex(0), RefCount(1),
         Parent(nullptr), ImplicitTask(this), Team(Team), TaskGroup(nullptr),
-        DependencyCount(0), execution(1), freed(0) {}
+        DependencyCount(0), execution(1), freed(0), fiber(nullptr) {
+    if (archer_flags->use_fibers)
+      fiber = __tsan_get_current_fiber();
+  }
 
   ~TaskData() {
     TsanDeleteClock(&Task);
     TsanDeleteClock(&Taskwait);
+    if (archer_flags->use_fibers && ImplicitTask!=this && fiber)
+      __tsan_destroy_fiber(fiber);
+  }
+  
+  void Activate() {
+    if (archer_flags->use_fibers && fiber)
+      __tsan_switch_to_fiber(fiber, 1);
   }
 
   void *GetTaskPtr() { return &Task; }
@@ -769,24 +791,6 @@ static void ompt_tsan_task_schedule(ompt_data_t *first_task_data,
     return;
   }
 
-  if (ToTask->execution == 0) {
-    ToTask->execution++;
-    // 1. Task will begin execution after it has been created.
-    TsanStartTLC(ToTask->GetTaskPtr());
-    for (unsigned i = 0; i < ToTask->DependencyCount; i++) {
-      ompt_dependence_t *Dependency = &ToTask->Dependencies[i];
-
-      TsanHappensAfter(Dependency->variable.ptr);
-      // in and inout dependencies are also blocked by prior in dependencies!
-      if (Dependency->dependence_type == ompt_dependence_type_out || Dependency->dependence_type == ompt_dependence_type_inout) {
-        TsanHappensAfter(ToInAddr(Dependency->variable.ptr));
-      }
-    }
-  } else {
-    // 2. Task will resume after it has been switched away.
-    TsanStartTLC(ToTask->GetTaskPtr());
-  }
-
   if (prior_task_status != ompt_task_complete) {
     ToTask->ImplicitTask = FromTask->ImplicitTask;
     assert(ToTask->ImplicitTask != NULL &&
@@ -826,6 +830,7 @@ static void ompt_tsan_task_schedule(ompt_data_t *first_task_data,
         TsanHappensBefore(Dependency->variable.ptr);
       }
     }
+    ToTask->Activate();
     while (FromTask != nullptr && --FromTask->RefCount == 0) {
       TaskData *Parent = FromTask->Parent;
       if (FromTask->DependencyCount > 0) {
@@ -834,7 +839,30 @@ static void ompt_tsan_task_schedule(ompt_data_t *first_task_data,
       delete FromTask;
       FromTask = Parent;
     }
+  } else {
+    ToTask->Activate();
   }
+
+  // we will use new stack, assume growing down
+  // TsanNewMemory((char*)&FromTask-1024, 1024);
+  if (ToTask->execution == 0) {
+    ToTask->execution++;
+    // 1. Task will begin execution after it has been created.
+    TsanHappensAfter(ToTask->GetTaskPtr());
+    for (unsigned i = 0; i < ToTask->DependencyCount; i++) {
+      ompt_dependence_t *Dependency = &ToTask->Dependencies[i];
+
+      TsanStartTLC(ToTask->GetTaskPtr());
+      // in and inout dependencies are also blocked by prior in dependencies!
+      if (Dependency->dependence_type == ompt_dependence_type_out || Dependency->dependence_type == ompt_dependence_type_inout) {
+        TsanHappensAfter(ToInAddr(Dependency->variable.ptr));
+      }
+    }
+  } else {
+    // 2. Task will resume after it has been switched away.
+    TsanStartTLC(ToTask->GetTaskPtr());
+  }
+
   if (hasReductionCallback < ompt_set_always && ToTask->InBarrier) {
     // We re-enter runtime code which currently performs a barrier.
     TsanIgnoreWritesBegin();
@@ -992,7 +1020,7 @@ ompt_start_tool_result_t *ompt_start_tool(unsigned int omp_version,
     std::cout << "Archer detected OpenMP application with TSan, supplying "
                  "OpenMP synchronization semantics"
               << std::endl;
-    if (archer_flags->no_tlc) {
+    if (!archer_flags->use_tlc) {
       std::cout << "Running in non-TLC mode" << std::endl;
     } else {
       std::cout << "Running in TLC mode" << std::endl;
