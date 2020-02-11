@@ -297,6 +297,18 @@ void INTERFACE_ATTRIBUTE AnnotateNewMemory(char *f, int l, uptr mem,
   OnAnnAlloc(thr, pc, mem, size, false);
 }
 
+void INTERFACE_ATTRIBUTE AnnotateMemoryRead(char *f, int l, uptr mem,
+                                            uptr size) {
+  SCOPED_ANNOTATION(AnnotateNewMemory);
+  MemoryAccessRange(thr, pc, mem, size, false);
+}
+
+void INTERFACE_ATTRIBUTE AnnotateMemoryWrite(char *f, int l, uptr mem,
+                                             uptr size) {
+  SCOPED_ANNOTATION(AnnotateNewMemory);
+  MemoryAccessRange(thr, pc, mem, size, true);
+}
+
 void INTERFACE_ATTRIBUTE AnnotateNoOp(char *f, int l, uptr mem) {
   SCOPED_ANNOTATION(AnnotateNoOp);
 }
