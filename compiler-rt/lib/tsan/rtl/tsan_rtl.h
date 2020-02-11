@@ -717,6 +717,7 @@ void Initialize(ThreadState *thr);
 void MaybeSpawnBackgroundThread();
 int Finalize(ThreadState *thr);
 
+void OnAnnAlloc(ThreadState *thr, uptr pc, uptr p, uptr sz, bool write);
 void OnUserAlloc(ThreadState *thr, uptr pc, uptr p, uptr sz, bool write);
 void OnUserFree(ThreadState *thr, uptr pc, uptr p, bool write);
 

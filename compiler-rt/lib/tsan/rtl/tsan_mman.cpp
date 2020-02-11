@@ -229,6 +229,15 @@ void OnUserAlloc(ThreadState *thr, uptr pc, uptr p, uptr sz, bool write) {
     MemoryResetRange(thr, pc, (uptr)p, sz);
 }
 
+void OnAnnAlloc(ThreadState *thr, uptr pc, uptr p, uptr sz, bool write) {
+  DPrintf("#%d: alloc(%zu) = %p\n", thr->tid, sz, p);
+  //  ctx->metamap.AllocBlock(thr, pc, p, sz);
+  if (write && thr->ignore_reads_and_writes == 0)
+    MemoryRangeImitateWrite(thr, pc, (uptr)p, sz);
+  else
+    MemoryResetRange(thr, pc, (uptr)p, sz);
+}
+
 void OnUserFree(ThreadState *thr, uptr pc, uptr p, bool write) {
   CHECK_NE(p, (void*)0);
   uptr sz = ctx->metamap.FreeBlock(thr->proc(), p);
