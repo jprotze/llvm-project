@@ -285,7 +285,7 @@ static ompt_get_thread_data_t ompt_get_thread_data;
 typedef int (*ompt_get_task_memory_t)(void **addr, size_t *size, int blocknum);
 static ompt_get_task_memory_t ompt_get_task_memory;
 
-typedef uint64_t ompt_tsan_clockid;
+typedef char ompt_tsan_clockid;
 
 static uint64_t my_next_id() {
   static uint64_t ID = 0;
@@ -300,9 +300,12 @@ static int pagesize{0};
 // DataPool<Type of objects, Size of blockalloc in pages>
 template <typename T, int N=1> struct DataPool {
   std::mutex DPMutex;
+  // store unused objects
   std::vector<T *> DataPointer;
   std::vector<T *> RemoteDataPointer;
+  // store all allocated memory to finally release
   std::list<void *> memory;
+  // statistics
   int total;
   std::atomic<int> remote;
   int remoteReturn;
@@ -313,6 +316,23 @@ template <typename T, int N=1> struct DataPool {
   virtual int getTotal(){return total;}
   virtual int getMissing(){return total - DataPointer.size() - RemoteDataPointer.size();}
 
+  // prefix the Data with a pointer to 'this', allows to return memory to
+  // 'this',
+  // without explicitly knowing the source.
+  //
+  // To reduce lock contention, we use thread local DataPools, but Data
+  // objects move to other threads.
+  // The strategy is to get objects from local pool. Only if the object moved
+  // to another
+  // thread, we might see a penalty on release (returnData).
+  // For "single producer" pattern, a single thread creates tasks, these are
+  // executed by other threads.
+  // The master will have a high demand on TaskData, so return after use.
+  struct pooldata {
+    DataPool<T, N> *dp;
+    T data;
+  };
+
   virtual void newDatas() {
     if (remote>0) {
       DPMutex.lock();
@@ -322,30 +342,17 @@ template <typename T, int N=1> struct DataPool {
       DPMutex.unlock();
       return;
     }
-    // prefix the Data with a pointer to 'this', allows to return memory to
-    // 'this',
-    // without explicitly knowing the source.
-    //
-    // To reduce lock contention, we use thread local DataPools, but Data
-    // objects move to other threads.
-    // The strategy is to get objects from local pool. Only if the object moved
-    // to another
-    // thread, we might see a penalty on release (returnData).
-    // For "single producer" pattern, a single thread creates tasks, these are
-    // executed by other threads.
-    // The master will have a high demand on TaskData, so return after use.
-    struct pooldata {
-      DataPool<T, N> *dp;
-      T data;
-    };
-    // We alloc without initialize the memory. We cannot call constructors.
-    // Therfore use malloc!
-    int ndatas = pagesize * N / sizeof(pooldata);
-    pooldata *datas = (pooldata *)calloc(ndatas, sizeof(pooldata));
+    // calculate size of an object including padding to cacheline size
+    size_t elemSize = sizeof(pooldata);
+    size_t paddedSize = (((elemSize - 1) / 64) + 1) * 64;
+    // number of padded elements to allocate
+    int ndatas = pagesize * N / paddedSize;
+    char *datas = (char *)malloc(ndatas * paddedSize);
     memory.push_back(datas);
     for (int i = 0; i < ndatas; i++) {
-      datas[i].dp = this;
-      DataPointer.emplace_back(&(datas[i].data));
+      pooldata& tmp = *(pooldata *)(datas + i*paddedSize);
+      tmp.dp = this;
+      DataPointer.push_back(&(tmp.data));
     }
     total += ndatas;
   }
@@ -565,56 +572,54 @@ template<> void retData<TaskData, 1>(void *data) {
 /// Data structure to store additional information for tasks.
 struct TaskData {
   /// Its address is used for relationships of this task.
-  ompt_tsan_clockid Task;
+  ompt_tsan_clockid Task{0};
 
   /// Child tasks use its address to declare a relationship to a taskwait in
   /// this task.
-  ompt_tsan_clockid Taskwait;
+  ompt_tsan_clockid Taskwait{0};
 
   /// Whether this task is currently executing a barrier.
-  bool InBarrier;
+  bool InBarrier{false};
 
   /// Whether this task is an included task.
-  bool Included;
+  bool Included{false};
+
+  /// count execution phase
+  int execution{0};
 
   /// Index of which barrier to use next.
-  char BarrierIndex;
+  char BarrierIndex{0};
 
   /// Count how often this structure has been put into child tasks + 1.
-  std::atomic_int RefCount;
+  std::atomic_int RefCount{1};
 
   /// Reference to the parent that created this task.
-  TaskData *Parent;
+  TaskData *Parent{nullptr};
 
   /// Reference to the implicit task in the stack above this task.
-  TaskData *ImplicitTask;
+  TaskData *ImplicitTask{nullptr};
 
   /// Reference to the team of this task.
-  ParallelData *Team;
+  ParallelData *Team{nullptr};
 
   /// Reference to the current taskgroup that this task either belongs to or
   /// that it just created.
-  Taskgroup *TaskGroup;
+  Taskgroup *TaskGroup{nullptr};
 
   /// Dependency information for this task.
-  ompt_dependence_t *Dependencies;
+  ompt_dependence_t *Dependencies{nullptr};
 
   /// Number of dependency entries.
-  unsigned DependencyCount;
+  unsigned DependencyCount{0};
 
-  void *PrivateData;
-  size_t PrivateDataSize;
-
-  int execution;
-  int freed;
+#ifdef DEBUG
+  int freed{0};
+#endif
 
   void *fiber;
 
   TaskData(TaskData *Parent)
-      : InBarrier(false), Included(false), BarrierIndex(0), RefCount(1),
-        Parent(Parent), ImplicitTask(nullptr), Team(Parent->Team),
-        TaskGroup(nullptr), DependencyCount(0), execution(0), freed(0),
-        fiber(nullptr) {
+      : Parent(Parent), Team(Parent->Team){
     if (Parent != nullptr) {
       Parent->RefCount++;
       // Copy over pointer to taskgroup. This task may set up its own stack
@@ -626,9 +631,7 @@ struct TaskData {
   }
 
   TaskData(ParallelData *Team = nullptr)
-      : InBarrier(false), Included(false), BarrierIndex(0), RefCount(1),
-        Parent(nullptr), ImplicitTask(this), Team(Team), TaskGroup(nullptr),
-        DependencyCount(0), execution(1), freed(0), fiber(nullptr) {
+      : ImplicitTask(this), Team(Team), execution(1){
     if (archer_flags->tasking)
       fiber = TsanGetCurrentFiber();
   }
@@ -767,8 +770,10 @@ static void ompt_tsan_implicit_task(ompt_scope_endpoint_t endpoint,
     break;
   case ompt_scope_end:
     TaskData *Data = ToTaskData(task_data);
+#ifdef DEBUG
     assert(Data->freed == 0 && "Implicit task end should only be called once!");
     Data->freed = 1;
+#endif
     assert(Data->RefCount == 1 &&
            "All tasks should have finished at the implicit barrier!");
     delete Data;
