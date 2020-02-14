@@ -31,6 +31,7 @@
 #include <dlfcn.h>
 #endif
 
+#include <unistd.h>
 #include <sys/resource.h>
 #include "omp-tools.h"
 
@@ -294,9 +295,10 @@ static uint64_t my_next_id() {
 
 std::mutex outputMutex{};
 
+static int pagesize{0};
 // Data structure to provide a threadsafe pool of reusable objects.
-// DataPool<Type of objects, Size of blockalloc>
-template <typename T, int N> struct DataPool {
+// DataPool<Type of objects, Size of blockalloc in pages>
+template <typename T, int N=1> struct DataPool {
   std::mutex DPMutex;
   std::vector<T *> DataPointer;
   std::vector<T *> RemoteDataPointer;
@@ -306,7 +308,7 @@ template <typename T, int N> struct DataPool {
   int remoteReturn;
   int localReturn;
   
-  virtual int getRemote(){return remoteReturn;}
+  virtual int getRemote(){return remoteReturn+remote;}
   virtual int getLocal(){return localReturn;}
   virtual int getTotal(){return total;}
   virtual int getMissing(){return total - DataPointer.size() - RemoteDataPointer.size();}
@@ -338,13 +340,14 @@ template <typename T, int N> struct DataPool {
     };
     // We alloc without initialize the memory. We cannot call constructors.
     // Therfore use malloc!
-    pooldata *datas = (pooldata *)calloc(N, sizeof(pooldata));
+    int ndatas = pagesize * N / sizeof(pooldata);
+    pooldata *datas = (pooldata *)calloc(ndatas, sizeof(pooldata));
     memory.push_back(datas);
-    for (int i = 0; i < N; i++) {
+    for (int i = 0; i < ndatas; i++) {
       datas[i].dp = this;
       DataPointer.emplace_back(&(datas[i].data));
     }
-    total += N;
+    total += ndatas;
   }
 
   virtual T *getData() {
@@ -367,6 +370,12 @@ template <typename T, int N> struct DataPool {
     remote++;
     remoteReturn++;
     DPMutex.unlock();
+  }
+
+  // This function takes care to return the data to the originating DataPool
+  // A pointer to the originating DataPool is stored just before the actual data.
+  static void retData(void *data) {
+    ((DataPool<T, N> **)data)[-1]->returnData((T *)data);
   }
 
   DataPool() : DPMutex(), DataPointer(), total(0), remote(0), remoteReturn(0), localReturn(0) {}
@@ -489,7 +498,8 @@ struct FiberData {
 __thread FiberData *FiberData::currentFiber{nullptr};
 
 struct ParallelData;
-__thread DataPool<ParallelData, 4> *pdp;
+typedef DataPool<ParallelData> ParallelDataPool;
+__thread ParallelDataPool *pdp;
 
 /// Data structure to store additional information for parallel regions.
 struct ParallelData {
@@ -512,7 +522,7 @@ struct ParallelData {
   }
   // overload new/delete to use DataPool for memory management.
   void *operator new(size_t size) { return pdp->getData(); }
-  void operator delete(void *p, size_t) { retData<ParallelData, 4>(p); }
+  void operator delete(void *p, size_t) { ParallelDataPool::retData(p); }
 };
 
 static inline ParallelData *ToParallelData(ompt_data_t *parallel_data) {
@@ -520,7 +530,8 @@ static inline ParallelData *ToParallelData(ompt_data_t *parallel_data) {
 }
 
 struct Taskgroup;
-__thread DataPool<Taskgroup, 4> *tgp;
+typedef DataPool<Taskgroup> TaskgroupPool;
+__thread TaskgroupPool *tgp;
 
 /// Data structure to support stacking of taskgroups and allow synchronization.
 struct Taskgroup {
@@ -536,14 +547,15 @@ struct Taskgroup {
   void *GetPtr() { return &Ptr; }
   // overload new/delete to use DataPool for memory management.
   void *operator new(size_t size) { return tgp->getData(); }
-  void operator delete(void *p, size_t) { retData<Taskgroup, 4>(p); }
+  void operator delete(void *p, size_t) { TaskgroupPool::retData(p); }
 };
 
 struct TaskData;
-__thread DataPool<TaskData, 4> *tdp;
+typedef DataPool<TaskData> TaskDataPool;
+__thread TaskDataPool *tdp;
 
-template<> void retData<TaskData, 4>(void *data) {
-  DataPool<TaskData, 4> * pool = ((DataPool<TaskData, 4> **)data)[-1];
+template<> void retData<TaskData, 1>(void *data) {
+  TaskDataPool * pool = ((TaskDataPool **)data)[-1];
   if (pool == tdp)
     pool->returnOwnData((TaskData*) data);
   else
@@ -639,7 +651,7 @@ struct TaskData {
   void *GetTaskwaitPtr() { return &Taskwait; }
   // overload new/delete to use DataPool for memory management.
   void *operator new(size_t size) { return tdp->getData(); }
-  void operator delete(void *p, size_t) { retData<TaskData, 4>(p); }
+  void operator delete(void *p, size_t) { retData<TaskData, 1>(p); }
 };
 
 static inline TaskData *ToTaskData(ompt_data_t *task_data) {
@@ -679,11 +691,11 @@ std::mutex LocksMutex;
 
 static void ompt_tsan_thread_begin(ompt_thread_t thread_type,
                                    ompt_data_t *thread_data) {
-  pdp = new DataPool<ParallelData, 4>;
+  pdp = new ParallelDataPool;
   TsanNewMemory(pdp, sizeof(pdp));
-  tgp = new DataPool<Taskgroup, 4>;
+  tgp = new TaskgroupPool;
   TsanNewMemory(tgp, sizeof(tgp));
-  tdp = new DataPool<TaskData, 4>;
+  tdp = new TaskDataPool;
   TsanNewMemory(tdp, sizeof(tdp));
   if (archer_flags->tasking) {
     fdp = new PDataPool<FiberData, 4>;
@@ -1225,6 +1237,8 @@ ompt_start_tool(unsigned int omp_version, const char *runtime_version) {
     return NULL;
   }*/
 
+  pagesize = getpagesize();
+  
   static ompt_start_tool_result_t ompt_start_tool_result = {
       &ompt_tsan_initialize, &ompt_tsan_finalize, {0}};
   runOnTsan = 1;
