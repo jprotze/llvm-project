@@ -37,6 +37,15 @@
 #include <sys/resource.h>
 #include "omp-tools.h"
 
+#define DEBUG
+#ifdef DEBUG
+#define DPrintf(...) printf(__VA_ARGS__)
+#define DTLCPrintf(...) printf(__VA_ARGS__)
+#else
+#define DPrintf(...)
+#define DTLCPrintf(...)
+#endif
+
 static int runOnTsan;
 static int hasReductionCallback;
 
@@ -49,6 +58,7 @@ public:
   int verbose;
   int enabled;
   int use_tlc;
+  int use_tlc_fibers;
   int use_fibers;
 
   ArcherFlags(const char *env)
@@ -56,8 +66,8 @@ public:
 #if (LLVM_VERSION) >= 40
         flush_shadow(0),
 #endif
-        print_ompt_counters(0), print_max_rss(0), verbose(0), enabled(1),
-        use_tlc(0), use_fibers(0) {
+        print_max_rss(0), verbose(0), enabled(1),
+        use_tlc(0), use_tlc_fibers(0), use_fibers(0) {
     if (env) {
       std::vector<std::string> tokens;
       std::string token;
@@ -81,6 +91,8 @@ public:
         if (sscanf(it->c_str(), "enable=%d", &enabled))
           continue;
         if (sscanf(it->c_str(), "use_tlc=%d", &use_tlc))
+          continue;
+        if (sscanf(it->c_str(), "use_tlc_fibers=%d", &use_tlc_fibers))
           continue;
         std::cerr << "Illegal values for ARCHER_OPTIONS variable: " << token
                   << std::endl;
@@ -220,6 +232,18 @@ void __attribute__((weak)) __tsan_switch_to_fiber(void *fiber, unsigned flags) {
 #endif
 }
 
+void *__tlc_get_current_fiber();
+void *__tlc_create_fiber(unsigned flags);
+void __tlc_destroy_fiber(void *fiber);
+void __tlc_switch_to_fiber(void *fiber, unsigned flags);
+
+#define TsanGetCurrentFiber() ((archer_flags->use_fibers)?__tsan_get_current_fiber():((archer_flags->use_tlc_fibers)?__tlc_get_current_fiber():nullptr))
+#define TsanCreateFiber(flag) ((archer_flags->use_fibers)?__tsan_create_fiber(flag):((archer_flags->use_tlc_fibers)?__tlc_create_fiber(flag):nullptr))
+#define TsanDestroyFiber(fiber) if (archer_flags->use_fibers) {__tsan_destroy_fiber(fiber);} else if (archer_flags->use_tlc_fibers) __tlc_destroy_fiber(fiber)
+#define TsanSwitchToFiber(fiber,flag) if (archer_flags->use_fibers) {__tsan_switch_to_fiber(fiber,flag);} else if (archer_flags->use_tlc_fibers) __tlc_switch_to_fiber(fiber,flag)
+
+
+
 // This marker is used to define a happens-before arc. The race detector will
 // infer an arc from the begin to the end when they share the same pointer
 // argument.
@@ -276,6 +300,9 @@ void __attribute__((weak)) __tsan_switch_to_fiber(void *fiber, unsigned flags) {
 /// Required OMPT inquiry functions.
 static ompt_get_parallel_info_t ompt_get_parallel_info;
 static ompt_get_thread_data_t ompt_get_thread_data;
+
+typedef int (*ompt_get_task_memory_t)(void **addr, size_t *size, int blocknum);
+static ompt_get_task_memory_t ompt_get_task_memory;
 
 typedef uint64_t ompt_tsan_clockid;
 
@@ -485,8 +512,9 @@ struct TaskData {
       // Copy over pointer to taskgroup. This task may set up its own stack
       // but for now belongs to its parent's taskgroup.
       TaskGroup = Parent->TaskGroup;
-      if (archer_flags->use_fibers)
-        fiber = __tsan_create_fiber(0);
+/*      if (archer_flags->use_fibers)
+        fiber = __tsan_create_fiber(0);*/
+      fiber = TsanCreateFiber(0);
     }
   }
 
@@ -494,20 +522,29 @@ struct TaskData {
       : InBarrier(false), Included(false), BarrierIndex(0), RefCount(1),
         Parent(nullptr), ImplicitTask(this), Team(Team), TaskGroup(nullptr),
         DependencyCount(0), execution(1), freed(0), fiber(nullptr) {
-    if (archer_flags->use_fibers)
-      fiber = __tsan_get_current_fiber();
+/*    if (archer_flags->use_fibers)
+      fiber = __tsan_get_current_fiber();*/
+      fiber = TsanGetCurrentFiber();
   }
 
   ~TaskData() {
     TsanDeleteClock(&Task);
     TsanDeleteClock(&Taskwait);
-    if (archer_flags->use_fibers && ImplicitTask!=this && fiber)
-      __tsan_destroy_fiber(fiber);
+    if (ImplicitTask!=this && fiber)
+    {
+      TsanDestroyFiber(fiber);
+    }
+/*    if (archer_flags->use_fibers && ImplicitTask!=this && fiber)
+      __tsan_destroy_fiber(fiber);*/
   }
   
   void Activate() {
-    if (archer_flags->use_fibers && fiber)
-      __tsan_switch_to_fiber(fiber, 1);
+/*    if (archer_flags->use_fibers && fiber)
+      __tsan_switch_to_fiber(fiber, 1);*/
+    if (fiber)
+    {
+      TsanSwitchToFiber(fiber, 1);
+    }
   }
 
   void *GetTaskPtr() { return &Task; }
@@ -521,6 +558,52 @@ struct TaskData {
 static inline TaskData *ToTaskData(ompt_data_t *task_data) {
   return reinterpret_cast<TaskData *>(task_data->ptr);
 }
+
+
+struct TlcFiber;
+__thread DataPool<TlcFiber, 4> *tfp;
+
+/// Data structure to support stacking of taskgroups and allow synchronization.
+struct TlcFiber {
+  /// Its address is used for relationships of the taskgroup's task set.
+  ompt_tsan_clockid Ptr;
+
+  void *GetPtr() { return &Ptr; }
+  // overload new/delete to use DataPool for memory management.
+  void *operator new(size_t size) { return tfp->getData(); }
+  void operator delete(void *p, size_t) { retData<TlcFiber, 4>(p); }
+};
+
+__thread TlcFiber* tlcFiber=nullptr;
+
+void *__tlc_get_current_fiber(){
+  DTLCPrintf("__tlc_get_current_fiber\n");
+  if (!tlcFiber)
+    tlcFiber = new TlcFiber;
+  return tlcFiber;
+}
+void *__tlc_create_fiber(unsigned flags){
+  DTLCPrintf("__tlc_create_fiber\n");
+  TlcFiber* ret = new TlcFiber;
+  AnnotateInitTLC(__FILE__, __LINE__, ret->GetPtr());
+  return ret;
+}
+void __tlc_destroy_fiber(void *fiber){
+  DTLCPrintf("__tlc_destroy_fiber\n");
+  delete reinterpret_cast<TlcFiber*>(fiber);
+}
+void __tlc_switch_to_fiber(void *fiber, unsigned flags){
+  DTLCPrintf("__tlc_switch_fiber\n");
+  if(tlcFiber)
+    TsanHappensBefore(tlcFiber->GetPtr());
+  tlcFiber = reinterpret_cast<TlcFiber*>(fiber);
+  if(flags){
+    AnnotateStartTLC(__FILE__, __LINE__, tlcFiber->GetPtr());
+  }
+}
+
+
+
 
 static inline void *ToInAddr(void *OutAddr) {
   // FIXME: This will give false negatives when a second variable lays directly
@@ -542,6 +625,8 @@ static void ompt_tsan_thread_begin(ompt_thread_t thread_type,
   TsanNewMemory(tgp, sizeof(tgp));
   tdp = new DataPool<TaskData, 4>;
   TsanNewMemory(tdp, sizeof(tdp));
+  tfp = new DataPool<TlcFiber, 4>;
+  TsanNewMemory(tfp, sizeof(tfp));
   thread_data->value = my_next_id();
 }
 
@@ -830,7 +915,7 @@ static void ompt_tsan_task_schedule(ompt_data_t *first_task_data,
         TsanHappensBefore(Dependency->variable.ptr);
       }
     }
-    ToTask->Activate();
+    ToTask->Activate(); // must switch to next task before deleting the previous
     while (FromTask != nullptr && --FromTask->RefCount == 0) {
       TaskData *Parent = FromTask->Parent;
       if (FromTask->DependencyCount > 0) {
@@ -844,11 +929,28 @@ static void ompt_tsan_task_schedule(ompt_data_t *first_task_data,
   }
 
   // we will use new stack, assume growing down
-  // TsanNewMemory((char*)&FromTask-1024, 1024);
+  if (!archer_flags->use_tlc_fibers)
+  {
+    TsanNewMemory((char*)&FromTask-1024, 1024);
+  }
   if (ToTask->execution == 0) {
+    if (ompt_get_task_memory){
+      void* addr;
+      size_t size;
+      if (ompt_get_task_memory(&addr, &size, 0))
+      {
+        if (!archer_flags->use_tlc_fibers){
+          TsanNewMemory(addr, size);
+        }
+        DTLCPrintf("TsanNewMemory(%p, %li)\n", addr, size);
+      }
+    }
     ToTask->execution++;
     // 1. Task will begin execution after it has been created.
-    TsanHappensAfter(ToTask->GetTaskPtr());
+    if (!archer_flags->use_tlc_fibers)
+    {
+      TsanStartTLC(ToTask->GetTaskPtr());
+    }
     for (unsigned i = 0; i < ToTask->DependencyCount; i++) {
       ompt_dependence_t *Dependency = &ToTask->Dependencies[i];
 
@@ -860,7 +962,9 @@ static void ompt_tsan_task_schedule(ompt_data_t *first_task_data,
     }
   } else {
     // 2. Task will resume after it has been switched away.
-    TsanStartTLC(ToTask->GetTaskPtr());
+    if (!archer_flags->use_tlc_fibers){
+      TsanStartTLC(ToTask->GetTaskPtr());
+    }
   }
 
   if (hasReductionCallback < ompt_set_always && ToTask->InBarrier) {
@@ -946,6 +1050,7 @@ static int ompt_tsan_initialize(ompt_function_lookup_t lookup,
   ompt_get_parallel_info =
       (ompt_get_parallel_info_t)lookup("ompt_get_parallel_info");
   ompt_get_thread_data = (ompt_get_thread_data_t)lookup("ompt_get_thread_data");
+  ompt_get_task_memory = (ompt_get_task_memory_t)lookup("ompt_get_task_memory");
 
   if (ompt_get_parallel_info == NULL) {
     fprintf(stderr, "Could not get inquiry function 'ompt_get_parallel_info', "
