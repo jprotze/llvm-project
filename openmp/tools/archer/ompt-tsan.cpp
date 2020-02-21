@@ -1,15 +1,14 @@
 /*
  * ompt-tsan.cpp -- Archer runtime library, TSan annotations for Archer
  */
-  
-  //===----------------------------------------------------------------------===//
-  //
-  // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-  // See https://llvm.org/LICENSE.txt for details.
-  // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-  //
-  //===----------------------------------------------------------------------===//
 
+//===----------------------------------------------------------------------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for details.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
 
 #ifndef __STDC_FORMAT_MACROS
 #define __STDC_FORMAT_MACROS
@@ -21,12 +20,11 @@
 #include <cstring>
 #include <inttypes.h>
 #include <iostream>
+#include <list>
 #include <mutex>
 #include <sstream>
 #include <stack>
-#include <list>
 #include <string>
-#include <iostream>
 #include <unordered_map>
 #include <vector>
 
@@ -34,8 +32,8 @@
 #include <dlfcn.h>
 #endif
 
-#include <sys/resource.h>
 #include "omp-tools.h"
+#include <sys/resource.h>
 
 #define DEBUG
 #ifdef DEBUG
@@ -66,8 +64,8 @@ public:
 #if (LLVM_VERSION) >= 40
         flush_shadow(0),
 #endif
-        print_max_rss(0), verbose(0), enabled(1),
-        use_tlc(0), use_tlc_fibers(0), use_fibers(0) {
+        print_max_rss(0), verbose(0), enabled(1), use_tlc(0), use_tlc_fibers(0),
+        use_fibers(0) {
     if (env) {
       std::vector<std::string> tokens;
       std::string token;
@@ -225,10 +223,20 @@ int __attribute__((weak)) RunningOnValgrind() {
 void __attribute__((weak)) __tsan_func_entry(const void *call_pc) {}
 void __attribute__((weak)) __tsan_func_exit(void) {}
 
-void __attribute__((weak)) *__tsan_get_current_fiber() {printf("__tsan_get_current_fiber\n");return nullptr;}
-void __attribute__((weak)) *__tsan_create_fiber(unsigned flags) {printf("__tsan_create_fiber\n");return nullptr;}
-void __attribute__((weak)) __tsan_destroy_fiber(void *fiber) {printf("__tsan_destroy_fiber\n");}
-void __attribute__((weak)) __tsan_switch_to_fiber(void *fiber, unsigned flags) {printf("__tsan_switch_to_fiber\n");}
+void __attribute__((weak)) * __tsan_get_current_fiber() {
+  printf("__tsan_get_current_fiber\n");
+  return nullptr;
+}
+void __attribute__((weak)) * __tsan_create_fiber(unsigned flags) {
+  printf("__tsan_create_fiber\n");
+  return nullptr;
+}
+void __attribute__((weak)) __tsan_destroy_fiber(void *fiber) {
+  printf("__tsan_destroy_fiber\n");
+}
+void __attribute__((weak)) __tsan_switch_to_fiber(void *fiber, unsigned flags) {
+  printf("__tsan_switch_to_fiber\n");
+}
 #endif
 }
 
@@ -237,12 +245,26 @@ void *__tlc_create_fiber(unsigned flags);
 void __tlc_destroy_fiber(void *fiber);
 void __tlc_switch_to_fiber(void *fiber, unsigned flags);
 
-#define TsanGetCurrentFiber() ((archer_flags->use_fibers)?__tsan_get_current_fiber():((archer_flags->use_tlc_fibers)?__tlc_get_current_fiber():nullptr))
-#define TsanCreateFiber(flag) ((archer_flags->use_fibers)?__tsan_create_fiber(flag):((archer_flags->use_tlc_fibers)?__tlc_create_fiber(flag):nullptr))
-#define TsanDestroyFiber(fiber) if (archer_flags->use_fibers) {__tsan_destroy_fiber(fiber);} else if (archer_flags->use_tlc_fibers) __tlc_destroy_fiber(fiber)
-#define TsanSwitchToFiber(fiber,flag) if (archer_flags->use_fibers) {__tsan_switch_to_fiber(fiber,flag);} else if (archer_flags->use_tlc_fibers) __tlc_switch_to_fiber(fiber,flag)
-
-
+#define TsanGetCurrentFiber()                                                  \
+  ((archer_flags->use_fibers)                                                  \
+       ? __tsan_get_current_fiber()                                            \
+       : ((archer_flags->use_tlc_fibers) ? __tlc_get_current_fiber()           \
+                                         : nullptr))
+#define TsanCreateFiber(flag)                                                  \
+  ((archer_flags->use_fibers)                                                  \
+       ? __tsan_create_fiber(flag)                                             \
+       : ((archer_flags->use_tlc_fibers) ? __tlc_create_fiber(flag)            \
+                                         : nullptr))
+#define TsanDestroyFiber(fiber)                                                \
+  if (archer_flags->use_fibers) {                                              \
+    __tsan_destroy_fiber(fiber);                                               \
+  } else if (archer_flags->use_tlc_fibers)                                     \
+  __tlc_destroy_fiber(fiber)
+#define TsanSwitchToFiber(fiber, flag)                                         \
+  if (archer_flags->use_fibers) {                                              \
+    __tsan_switch_to_fiber(fiber, flag);                                       \
+  } else if (archer_flags->use_tlc_fibers)                                     \
+  __tlc_switch_to_fiber(fiber, flag)
 
 // This marker is used to define a happens-before arc. The race detector will
 // infer an arc from the begin to the end when they share the same pointer
@@ -254,13 +276,13 @@ void __tlc_switch_to_fiber(void *fiber, unsigned flags);
 
 // convenience macros to handle the conditional annotation w/ or w/o TLC
 #define IfTLCBefore(f, cv)                                                     \
-  if (!archer_flags->use_tlc)                                                    \
+  if (!archer_flags->use_tlc)                                                  \
     AnnotateHappensBefore(__FILE__, __LINE__, cv);                             \
   else                                                                         \
     f(__FILE__, __LINE__, cv)
 
 #define IfTLCAfter(f, cv)                                                      \
-  if (!archer_flags->use_tlc)                                                    \
+  if (!archer_flags->use_tlc)                                                  \
     AnnotateHappensAfter(__FILE__, __LINE__, cv);                              \
   else                                                                         \
     f(__FILE__, __LINE__, cv)
@@ -500,20 +522,21 @@ struct TaskData {
 
   int execution;
   int freed;
-  
-  void* fiber;
+
+  void *fiber;
 
   TaskData(TaskData *Parent)
       : InBarrier(false), Included(false), BarrierIndex(0), RefCount(1),
         Parent(Parent), ImplicitTask(nullptr), Team(Parent->Team),
-        TaskGroup(nullptr), DependencyCount(0), execution(0), freed(0), fiber(nullptr) {
+        TaskGroup(nullptr), DependencyCount(0), execution(0), freed(0),
+        fiber(nullptr) {
     if (Parent != nullptr) {
       Parent->RefCount++;
       // Copy over pointer to taskgroup. This task may set up its own stack
       // but for now belongs to its parent's taskgroup.
       TaskGroup = Parent->TaskGroup;
-/*      if (archer_flags->use_fibers)
-        fiber = __tsan_create_fiber(0);*/
+      /*      if (archer_flags->use_fibers)
+              fiber = __tsan_create_fiber(0);*/
       fiber = TsanCreateFiber(0);
     }
   }
@@ -522,27 +545,25 @@ struct TaskData {
       : InBarrier(false), Included(false), BarrierIndex(0), RefCount(1),
         Parent(nullptr), ImplicitTask(this), Team(Team), TaskGroup(nullptr),
         DependencyCount(0), execution(1), freed(0), fiber(nullptr) {
-/*    if (archer_flags->use_fibers)
-      fiber = __tsan_get_current_fiber();*/
-      fiber = TsanGetCurrentFiber();
+    /*    if (archer_flags->use_fibers)
+          fiber = __tsan_get_current_fiber();*/
+    fiber = TsanGetCurrentFiber();
   }
 
   ~TaskData() {
     TsanDeleteClock(&Task);
     TsanDeleteClock(&Taskwait);
-    if (ImplicitTask!=this && fiber)
-    {
+    if (ImplicitTask != this && fiber) {
       TsanDestroyFiber(fiber);
     }
-/*    if (archer_flags->use_fibers && ImplicitTask!=this && fiber)
-      __tsan_destroy_fiber(fiber);*/
+    /*    if (archer_flags->use_fibers && ImplicitTask!=this && fiber)
+          __tsan_destroy_fiber(fiber);*/
   }
-  
+
   void Activate() {
-/*    if (archer_flags->use_fibers && fiber)
-      __tsan_switch_to_fiber(fiber, 1);*/
-    if (fiber)
-    {
+    /*    if (archer_flags->use_fibers && fiber)
+          __tsan_switch_to_fiber(fiber, 1);*/
+    if (fiber) {
       TsanSwitchToFiber(fiber, 1);
     }
   }
@@ -559,7 +580,6 @@ static inline TaskData *ToTaskData(ompt_data_t *task_data) {
   return reinterpret_cast<TaskData *>(task_data->ptr);
 }
 
-
 struct TlcFiber;
 __thread DataPool<TlcFiber, 4> *tfp;
 
@@ -574,36 +594,33 @@ struct TlcFiber {
   void operator delete(void *p, size_t) { retData<TlcFiber, 4>(p); }
 };
 
-__thread TlcFiber* tlcFiber=nullptr;
+__thread TlcFiber *tlcFiber = nullptr;
 
-void *__tlc_get_current_fiber(){
+void *__tlc_get_current_fiber() {
   DTLCPrintf("__tlc_get_current_fiber\n");
   if (!tlcFiber)
     tlcFiber = new TlcFiber;
   return tlcFiber;
 }
-void *__tlc_create_fiber(unsigned flags){
+void *__tlc_create_fiber(unsigned flags) {
   DTLCPrintf("__tlc_create_fiber\n");
-  TlcFiber* ret = new TlcFiber;
+  TlcFiber *ret = new TlcFiber;
   AnnotateInitTLC(__FILE__, __LINE__, ret->GetPtr());
   return ret;
 }
-void __tlc_destroy_fiber(void *fiber){
+void __tlc_destroy_fiber(void *fiber) {
   DTLCPrintf("__tlc_destroy_fiber\n");
-  delete reinterpret_cast<TlcFiber*>(fiber);
+  delete reinterpret_cast<TlcFiber *>(fiber);
 }
-void __tlc_switch_to_fiber(void *fiber, unsigned flags){
+void __tlc_switch_to_fiber(void *fiber, unsigned flags) {
   DTLCPrintf("__tlc_switch_fiber\n");
-  if(tlcFiber)
+  if (tlcFiber)
     TsanHappensBefore(tlcFiber->GetPtr());
-  tlcFiber = reinterpret_cast<TlcFiber*>(fiber);
-  if(flags){
+  tlcFiber = reinterpret_cast<TlcFiber *>(fiber);
+  if (flags) {
     AnnotateStartTLC(__FILE__, __LINE__, tlcFiber->GetPtr());
   }
 }
-
-
-
 
 static inline void *ToInAddr(void *OutAddr) {
   // FIXME: This will give false negatives when a second variable lays directly
@@ -641,8 +658,7 @@ static void ompt_tsan_thread_end(ompt_data_t *thread_data) {
 static void ompt_tsan_parallel_begin(ompt_data_t *parent_task_data,
                                      const ompt_frame_t *parent_task_frame,
                                      ompt_data_t *parallel_data,
-                                     uint32_t requested_team_size,
-                                     int flag,
+                                     uint32_t requested_team_size, int flag,
                                      const void *codeptr_ra) {
   ParallelData *Data = new ParallelData(codeptr_ra);
   parallel_data->ptr = Data;
@@ -651,8 +667,7 @@ static void ompt_tsan_parallel_begin(ompt_data_t *parent_task_data,
 }
 
 static void ompt_tsan_parallel_end(ompt_data_t *parallel_data,
-                                   ompt_data_t *task_data,
-                                   int flag,
+                                   ompt_data_t *task_data, int flag,
                                    const void *codeptr_ra) {
   ParallelData *Data = ToParallelData(parallel_data);
   TsanHappensAfter(Data->GetBarrierPtr(0));
@@ -666,15 +681,13 @@ static void ompt_tsan_parallel_end(ompt_data_t *parallel_data,
       __tsan_flush_memory();
   }
 #endif
-
 }
 
 static void ompt_tsan_implicit_task(ompt_scope_endpoint_t endpoint,
                                     ompt_data_t *parallel_data,
                                     ompt_data_t *task_data,
                                     unsigned int team_size,
-                                    unsigned int thread_num,
-                                    int type) {
+                                    unsigned int thread_num, int type) {
   switch (endpoint) {
   case ompt_scope_begin:
     if (type & ompt_task_initial) {
@@ -706,86 +719,86 @@ static void ompt_tsan_sync_region(ompt_sync_region_t kind,
   case ompt_scope_begin:
     TsanFuncEntry(codeptr_ra);
     switch (kind) {
-      case ompt_sync_region_barrier_implementation:
-      case ompt_sync_region_barrier_implicit:
-      case ompt_sync_region_barrier_explicit:
-      case ompt_sync_region_barrier: {
-        char BarrierIndex = Data->BarrierIndex;
-        TsanHappensBefore(Data->Team->GetBarrierPtr(BarrierIndex));
+    case ompt_sync_region_barrier_implementation:
+    case ompt_sync_region_barrier_implicit:
+    case ompt_sync_region_barrier_explicit:
+    case ompt_sync_region_barrier: {
+      char BarrierIndex = Data->BarrierIndex;
+      TsanHappensBefore(Data->Team->GetBarrierPtr(BarrierIndex));
 
-        if (hasReductionCallback < ompt_set_always) {
-          // We ignore writes inside the barrier. These would either occur during
-          // 1. reductions performed by the runtime which are guaranteed to be
-          // race-free.
-          // 2. execution of another task.
-          // For the latter case we will re-enable tracking in task_switch.
-          Data->InBarrier = true;
-          TsanIgnoreWritesBegin();
-        }
-
-        break;
+      if (hasReductionCallback < ompt_set_always) {
+        // We ignore writes inside the barrier. These would either occur during
+        // 1. reductions performed by the runtime which are guaranteed to be
+        // race-free.
+        // 2. execution of another task.
+        // For the latter case we will re-enable tracking in task_switch.
+        Data->InBarrier = true;
+        TsanIgnoreWritesBegin();
       }
 
-      case ompt_sync_region_taskwait:
-        break;
+      break;
+    }
 
-      case ompt_sync_region_taskgroup:
-        Data->TaskGroup = new Taskgroup(Data->TaskGroup);
-        break;
+    case ompt_sync_region_taskwait:
+      break;
 
-      default:
-        break;
+    case ompt_sync_region_taskgroup:
+      Data->TaskGroup = new Taskgroup(Data->TaskGroup);
+      break;
+
+    default:
+      break;
     }
     break;
   case ompt_scope_end:
     TsanFuncExit();
     switch (kind) {
-      case ompt_sync_region_barrier_implementation:
-      case ompt_sync_region_barrier_implicit:
-      case ompt_sync_region_barrier_explicit:
-      case ompt_sync_region_barrier: {
-        if (hasReductionCallback < ompt_set_always) {
-          // We want to track writes after the barrier again.
-          Data->InBarrier = false;
-          TsanIgnoreWritesEnd();
-        }
-
-        char BarrierIndex = Data->BarrierIndex;
-        // Barrier will end after it has been entered by all threads.
-        if (parallel_data)
-          TsanHappensAfter(Data->Team->GetBarrierPtr(BarrierIndex));
-
-        // It is not guaranteed that all threads have exited this barrier before
-        // we enter the next one. So we will use a different address.
-        // We are however guaranteed that this current barrier is finished
-        // by the time we exit the next one. So we can then reuse the first
-        // address.
-        Data->BarrierIndex = (BarrierIndex + 1) % 2;
-        break;
+    case ompt_sync_region_barrier_implementation:
+    case ompt_sync_region_barrier_implicit:
+    case ompt_sync_region_barrier_explicit:
+    case ompt_sync_region_barrier: {
+      if (hasReductionCallback < ompt_set_always) {
+        // We want to track writes after the barrier again.
+        Data->InBarrier = false;
+        TsanIgnoreWritesEnd();
       }
 
-      case ompt_sync_region_taskwait: {
-        if (Data->execution > 1)
-          TsanHappensAfter(Data->GetTaskwaitPtr());
-        break;
-      }
+      char BarrierIndex = Data->BarrierIndex;
+      // Barrier will end after it has been entered by all threads.
+      if (parallel_data)
+        TsanHappensAfter(Data->Team->GetBarrierPtr(BarrierIndex));
 
-      case ompt_sync_region_taskgroup: {
-        assert(Data->TaskGroup != nullptr &&
-               "Should have at least one taskgroup!");
+      // It is not guaranteed that all threads have exited this barrier before
+      // we enter the next one. So we will use a different address.
+      // We are however guaranteed that this current barrier is finished
+      // by the time we exit the next one. So we can then reuse the first
+      // address.
+      Data->BarrierIndex = (BarrierIndex + 1) % 2;
+      break;
+    }
 
-        TsanHappensAfter(Data->TaskGroup->GetPtr());
+    case ompt_sync_region_taskwait: {
+      if (Data->execution > 1)
+        TsanHappensAfter(Data->GetTaskwaitPtr());
+      break;
+    }
 
-        // Delete this allocated taskgroup, all descendent task are finished by
-        // now.
-        Taskgroup *Parent = Data->TaskGroup->Parent;
-        delete Data->TaskGroup;
-        Data->TaskGroup = Parent;
-        break;
-      }
+    case ompt_sync_region_taskgroup: {
+      assert(Data->TaskGroup != nullptr &&
+             "Should have at least one taskgroup!");
 
-      default:
-        break;
+      TsanHappensAfter(Data->TaskGroup->GetPtr());
+
+      // Delete this allocated taskgroup, all descendent task are finished by
+      // now.
+      Taskgroup *Parent = Data->TaskGroup->Parent;
+      delete Data->TaskGroup;
+      Data->TaskGroup = Parent;
+      break;
+    }
+
+    default:
+      break;
     }
     break;
   }
@@ -799,20 +812,20 @@ static void ompt_tsan_reduction(ompt_sync_region_t kind,
   switch (endpoint) {
   case ompt_scope_begin:
     switch (kind) {
-      case ompt_sync_region_reduction:
-        TsanIgnoreWritesBegin();
-        break;
-      default:
-        break;
+    case ompt_sync_region_reduction:
+      TsanIgnoreWritesBegin();
+      break;
+    default:
+      break;
     }
     break;
   case ompt_scope_end:
     switch (kind) {
-      case ompt_sync_region_reduction:
-        TsanIgnoreWritesEnd();
-        break;
-      default:
-        break;
+    case ompt_sync_region_reduction:
+      TsanIgnoreWritesEnd();
+      break;
+    default:
+      break;
     }
     break;
   }
@@ -821,9 +834,9 @@ static void ompt_tsan_reduction(ompt_sync_region_t kind,
 /// OMPT event callbacks for handling tasks.
 
 static void ompt_tsan_task_create(
-    ompt_data_t *parent_task_data, /* id of parent task            */
+    ompt_data_t *parent_task_data,    /* id of parent task            */
     const ompt_frame_t *parent_frame, /* frame data for parent task   */
-    ompt_data_t *new_task_data, /* id of created task           */
+    ompt_data_t *new_task_data,       /* id of created task           */
     int type, int has_dependences,
     const void *codeptr_ra) /* pointer to outlined function */
 {
@@ -911,7 +924,8 @@ static void ompt_tsan_task_schedule(ompt_data_t *first_task_data,
 
       // in dependencies block following inout and out dependencies!
       TsanHappensBefore(ToInAddr(Dependency->variable.ptr));
-      if (Dependency->dependence_type == ompt_dependence_type_out || Dependency->dependence_type == ompt_dependence_type_inout) {
+      if (Dependency->dependence_type == ompt_dependence_type_out ||
+          Dependency->dependence_type == ompt_dependence_type_inout) {
         TsanHappensBefore(Dependency->variable.ptr);
       }
     }
@@ -929,17 +943,15 @@ static void ompt_tsan_task_schedule(ompt_data_t *first_task_data,
   }
 
   // we will use new stack, assume growing down
-  if (!archer_flags->use_tlc_fibers)
-  {
-    TsanNewMemory((char*)&FromTask-1024, 1024);
+  if (!archer_flags->use_tlc_fibers) {
+    TsanNewMemory((char *)&FromTask - 1024, 1024);
   }
   if (ToTask->execution == 0) {
-    if (ompt_get_task_memory){
-      void* addr;
+    if (ompt_get_task_memory) {
+      void *addr;
       size_t size;
-      if (ompt_get_task_memory(&addr, &size, 0))
-      {
-        if (!archer_flags->use_tlc_fibers){
+      if (ompt_get_task_memory(&addr, &size, 0)) {
+        if (!archer_flags->use_tlc_fibers) {
           TsanNewMemory(addr, size);
         }
         DTLCPrintf("TsanNewMemory(%p, %li)\n", addr, size);
@@ -947,8 +959,7 @@ static void ompt_tsan_task_schedule(ompt_data_t *first_task_data,
     }
     ToTask->execution++;
     // 1. Task will begin execution after it has been created.
-    if (!archer_flags->use_tlc_fibers)
-    {
+    if (!archer_flags->use_tlc_fibers) {
       TsanStartTLC(ToTask->GetTaskPtr());
     }
     for (unsigned i = 0; i < ToTask->DependencyCount; i++) {
@@ -956,13 +967,14 @@ static void ompt_tsan_task_schedule(ompt_data_t *first_task_data,
 
       TsanStartTLC(ToTask->GetTaskPtr());
       // in and inout dependencies are also blocked by prior in dependencies!
-      if (Dependency->dependence_type == ompt_dependence_type_out || Dependency->dependence_type == ompt_dependence_type_inout) {
+      if (Dependency->dependence_type == ompt_dependence_type_out ||
+          Dependency->dependence_type == ompt_dependence_type_inout) {
         TsanHappensAfter(ToInAddr(Dependency->variable.ptr));
       }
     }
   } else {
     // 2. Task will resume after it has been switched away.
-    if (!archer_flags->use_tlc_fibers){
+    if (!archer_flags->use_tlc_fibers) {
       TsanStartTLC(ToTask->GetTaskPtr());
     }
   }
@@ -974,14 +986,12 @@ static void ompt_tsan_task_schedule(ompt_data_t *first_task_data,
 }
 
 static void ompt_tsan_dependences(ompt_data_t *task_data,
-                                  const ompt_dependence_t *deps,
-                                  int ndeps) {
+                                  const ompt_dependence_t *deps, int ndeps) {
   if (ndeps > 0) {
     // Copy the data to use it in task_switch and task_end.
     TaskData *Data = ToTaskData(task_data);
     Data->Dependencies = new ompt_dependence_t[ndeps];
-    std::memcpy(Data->Dependencies, deps,
-                sizeof(ompt_dependence_t) * ndeps);
+    std::memcpy(Data->Dependencies, deps, sizeof(ompt_dependence_t) * ndeps);
     Data->DependencyCount = ndeps;
 
     // This callback is executed before this task is first started.
@@ -990,53 +1000,51 @@ static void ompt_tsan_dependences(ompt_data_t *task_data,
 }
 
 /// OMPT event callbacks for handling locking.
-static void ompt_tsan_mutex_acquired(ompt_mutex_t kind,
-                                     ompt_wait_id_t wait_id,
+static void ompt_tsan_mutex_acquired(ompt_mutex_t kind, ompt_wait_id_t wait_id,
                                      const void *codeptr_ra) {
 
   // Acquire our own lock to make sure that
   // 1. the previous release has finished.
   // 2. the next acquire doesn't start before we have finished our release.
-    LocksMutex.lock();
-    std::mutex &Lock = Locks[wait_id];
-    LocksMutex.unlock();
+  LocksMutex.lock();
+  std::mutex &Lock = Locks[wait_id];
+  LocksMutex.unlock();
 
-    Lock.lock();
-    TsanHappensAfter(&Lock);
+  Lock.lock();
+  TsanHappensAfter(&Lock);
 }
 
-static void ompt_tsan_mutex_released(ompt_mutex_t kind,
-                                     ompt_wait_id_t wait_id,
+static void ompt_tsan_mutex_released(ompt_mutex_t kind, ompt_wait_id_t wait_id,
                                      const void *codeptr_ra) {
-    LocksMutex.lock();
-    std::mutex &Lock = Locks[wait_id];
-    LocksMutex.unlock();
-    TsanHappensBefore(&Lock);
+  LocksMutex.lock();
+  std::mutex &Lock = Locks[wait_id];
+  LocksMutex.unlock();
+  TsanHappensBefore(&Lock);
 
-    Lock.unlock();
+  Lock.unlock();
 }
 
 // callback , signature , variable to store result , required support level
-#define SET_OPTIONAL_CALLBACK_T(event, type, result, level)                             \
-  do {                                                                                  \
-    ompt_callback_##type##_t tsan_##event = &ompt_tsan_##event;                         \
-    result = ompt_set_callback(ompt_callback_##event,                                   \
-                                (ompt_callback_t)tsan_##event);                         \
-    if (result < level)                                                                 \
-      printf("Registered callback '" #event "' is not supported at " #level " (%i)\n",  \
-             result);                                                                   \
+#define SET_OPTIONAL_CALLBACK_T(event, type, result, level)                    \
+  do {                                                                         \
+    ompt_callback_##type##_t tsan_##event = &ompt_tsan_##event;                \
+    result = ompt_set_callback(ompt_callback_##event,                          \
+                               (ompt_callback_t)tsan_##event);                 \
+    if (result < level)                                                        \
+      printf("Registered callback '" #event "' is not supported at " #level    \
+             " (%i)\n",                                                        \
+             result);                                                          \
   } while (0)
 
-#define SET_CALLBACK_T(event, type)                              \
-  do {                                                           \
-    int res;                                                     \
-    SET_OPTIONAL_CALLBACK_T(event, type, res, ompt_set_always);  \
+#define SET_CALLBACK_T(event, type)                                            \
+  do {                                                                         \
+    int res;                                                                   \
+    SET_OPTIONAL_CALLBACK_T(event, type, res, ompt_set_always);                \
   } while (0)
 
 #define SET_CALLBACK(event) SET_CALLBACK_T(event, event)
 
-static int ompt_tsan_initialize(ompt_function_lookup_t lookup,
-                                int device_num,
+static int ompt_tsan_initialize(ompt_function_lookup_t lookup, int device_num,
                                 ompt_data_t *tool_data) {
   const char *options = getenv("TSAN_OPTIONS");
   TsanFlags tsan_flags(options);
@@ -1071,13 +1079,14 @@ static int ompt_tsan_initialize(ompt_function_lookup_t lookup,
 
   SET_CALLBACK_T(mutex_acquired, mutex);
   SET_CALLBACK_T(mutex_released, mutex);
-  SET_OPTIONAL_CALLBACK_T(reduction, sync_region, hasReductionCallback, ompt_set_never);
+  SET_OPTIONAL_CALLBACK_T(reduction, sync_region, hasReductionCallback,
+                          ompt_set_never);
 
   if (!tsan_flags.ignore_noninstrumented_modules)
-    fprintf(
-        stderr,
-        "Warning: please export TSAN_OPTIONS='ignore_noninstrumented_modules=1' "
-        "to avoid false positive reports from the OpenMP runtime!\n");
+    fprintf(stderr,
+            "Warning: please export "
+            "TSAN_OPTIONS='ignore_noninstrumented_modules=1' "
+            "to avoid false positive reports from the OpenMP runtime.!\n");
   return 1; // success
 }
 
@@ -1092,23 +1101,20 @@ static void ompt_tsan_finalize(ompt_data_t *tool_data) {
     delete archer_flags;
 }
 
-extern "C"
-ompt_start_tool_result_t *ompt_start_tool(unsigned int omp_version,
-                                          const char *runtime_version) {
+extern "C" ompt_start_tool_result_t *
+ompt_start_tool(unsigned int omp_version, const char *runtime_version) {
   const char *options = getenv("ARCHER_OPTIONS");
   archer_flags = new ArcherFlags(options);
-  if (!archer_flags->enabled)
-  {
+  if (!archer_flags->enabled) {
     if (archer_flags->verbose)
-      std::cout << "Archer disabled, stopping operation"
-                << std::endl;
+      std::cout << "Archer disabled, stopping operation" << std::endl;
     delete archer_flags;
     return NULL;
   }
-  
+
   static ompt_start_tool_result_t ompt_start_tool_result = {
       &ompt_tsan_initialize, &ompt_tsan_finalize, {0}};
-  runOnTsan=1;
+  runOnTsan = 1;
   RunningOnValgrind();
   if (!runOnTsan) // if we are not running on TSAN, give a different tool the
   // chance to be loaded
