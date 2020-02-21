@@ -23,7 +23,6 @@
 #include <list>
 #include <mutex>
 #include <sstream>
-#include <stack>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -58,6 +57,7 @@ public:
   int use_tlc;
   int use_tlc_fibers;
   int use_fibers;
+  int use_fiberpool;
 
   ArcherFlags(const char *env)
       :
@@ -65,7 +65,7 @@ public:
         flush_shadow(0),
 #endif
         print_max_rss(0), verbose(0), enabled(1), use_tlc(0), use_tlc_fibers(0),
-        use_fibers(0) {
+        use_fibers(0), use_fiberpool(0) {
     if (env) {
       std::vector<std::string> tokens;
       std::string token;
@@ -85,6 +85,8 @@ public:
         if (sscanf(it->c_str(), "verbose=%d", &verbose))
           continue;
         if (sscanf(it->c_str(), "use_fibers=%d", &use_fibers))
+          continue;
+        if (sscanf(it->c_str(), "use_fiberpool=%d", &use_fiberpool))
           continue;
         if (sscanf(it->c_str(), "enable=%d", &enabled))
           continue;
@@ -179,6 +181,17 @@ static void AnnotateNewMemory(const char *file, int line,
   fptr = (void (*)(const char *, int, const volatile void *, size_t))dlsym(
       RTLD_DEFAULT, "AnnotateNewMemory");
   (*fptr)(file, line, cv, size);
+}
+static void __tsan_func_entry(const void *call_pc) {
+  static void (*fptr)(const void *) =
+      (void (*)(const void *))dlsym(RTLD_DEFAULT, "__tsan_func_entry");
+  if (fptr)
+    (*fptr)(call_pc);
+}
+static void __tsan_func_exit() {
+  static void (*fptr)() = (void (*)())dlsym(RTLD_DEFAULT, "__tsan_func_exit");
+  if (fptr)
+    (*fptr)();
 }
 static int RunningOnValgrind() {
   int (*fptr)();
@@ -338,10 +351,88 @@ static uint64_t my_next_id() {
 // DataPool<Type of objects, Size of blockalloc>
 template <typename T, int N> struct DataPool {
   std::mutex DPMutex;
-  std::stack<T *> DataPointer;
+  std::list<T *> DataPointer;
   std::list<void *> memory;
   int total;
 
+  virtual void newDatas() {
+    // prefix the Data with a pointer to 'this', allows to return memory to
+    // 'this',
+    // without explicitly knowing the source.
+    //
+    // To reduce lock contention, we use thread local DataPools, but Data
+    // objects move to other threads.
+    // The strategy is to get objects from local pool. Only if the object moved
+    // to another
+    // thread, we might see a penalty on release (returnData).
+    // For "single producer" pattern, a single thread creates tasks, these are
+    // executed by other threads.
+    // The master will have a high demand on TaskData, so return after use.
+    struct pooldata {
+      DataPool<T, N> *dp;
+      T data;
+    };
+    // We alloc without initialize the memory. We cannot call constructors.
+    // Therfore use malloc!
+    pooldata *datas = (pooldata *)calloc(N, sizeof(pooldata));
+    memory.push_back(datas);
+    for (int i = 0; i < N; i++) {
+      datas[i].dp = this;
+      DataPointer.push_back(&(datas[i].data));
+    }
+    total += N;
+  }
+
+  T *getData() {
+    T *ret;
+    DPMutex.lock();
+    if (DataPointer.empty())
+      newDatas();
+    ret = DataPointer.back();
+    DataPointer.pop_back();
+    DPMutex.unlock();
+    return ret;
+  }
+
+  void returnData(T *data) {
+    DPMutex.lock();
+    DataPointer.push_back(data);
+    DPMutex.unlock();
+  }
+
+  void getDatas(int n, T **datas) {
+    DPMutex.lock();
+    for (int i = 0; i < n; i++) {
+      if (DataPointer.empty())
+        newDatas();
+      datas[i] = DataPointer.back();
+      DataPointer.pop_back();
+    }
+    DPMutex.unlock();
+  }
+
+  void returnDatas(int n, T **datas) {
+    DPMutex.lock();
+    for (int i = 0; i < n; i++) {
+      DataPointer.push_back(datas[i]);
+    }
+    DPMutex.unlock();
+  }
+
+  DataPool() : DPMutex(), DataPointer(), total(0) {}
+
+  virtual ~DataPool() {
+    // we assume all memory is returned when the thread finished / destructor is
+    // called
+    for (auto i : memory)
+      if (i)
+        free(i);
+  }
+};
+
+// Data structure to provide a threadsafe pool of reusable objects.
+// DataPool<Type of objects, Size of blockalloc>
+template <typename T, int N> struct PDataPool : public DataPool<T, N> {
   void newDatas() {
     // prefix the Data with a pointer to 'this', allows to return memory to
     // 'this',
@@ -360,58 +451,22 @@ template <typename T, int N> struct DataPool {
       T data;
     };
     // We alloc without initialize the memory. We cannot call constructors.
-    // Therefore use malloc!
-    pooldata *datas = (pooldata *)malloc(sizeof(pooldata) * N);
-    memory.push_back(datas);
+    // Therfore use malloc!
+    pooldata *datas = (pooldata *)calloc(N, sizeof(pooldata));
+    this->memory.push_back(datas);
     for (int i = 0; i < N; i++) {
       datas[i].dp = this;
-      DataPointer.push(&(datas[i].data));
+      this->DataPointer.push_back(&(datas[i].data));
+      datas[i].data.init();
     }
-    total += N;
+    this->total += N;
   }
-
-  T *getData() {
-    T *ret;
-    DPMutex.lock();
-    if (DataPointer.empty())
-      newDatas();
-    ret = DataPointer.top();
-    DataPointer.pop();
-    DPMutex.unlock();
-    return ret;
-  }
-
-  void returnData(T *data) {
-    DPMutex.lock();
-    DataPointer.push(data);
-    DPMutex.unlock();
-  }
-
-  void getDatas(int n, T **datas) {
-    DPMutex.lock();
-    for (int i = 0; i < n; i++) {
-      if (DataPointer.empty())
-        newDatas();
-      datas[i] = DataPointer.top();
-      DataPointer.pop();
-    }
-    DPMutex.unlock();
-  }
-
-  void returnDatas(int n, T **datas) {
-    DPMutex.lock();
-    for (int i = 0; i < n; i++) {
-      DataPointer.push(datas[i]);
-    }
-    DPMutex.unlock();
-  }
-
-  DataPool() : DPMutex(), DataPointer(), total(0) {}
-
-  ~DataPool() {
+  ~PDataPool() {
+    for (auto i : this->DataPointer)
+      i->fini();
     // we assume all memory is returned when the thread finished / destructor is
     // called
-    for (auto i : memory)
+    for (auto i : this->memory)
       if (i)
         free(i);
   }
@@ -422,6 +477,49 @@ template <typename T, int N> struct DataPool {
 template <typename T, int N> static void retData(void *data) {
   ((DataPool<T, N> **)data)[-1]->returnData((T *)data);
 }
+
+struct FiberData;
+__thread PDataPool<FiberData, 4> *fdp{nullptr};
+
+/// Data structure to store additional information for parallel regions.
+struct FiberData {
+  static __thread FiberData *threadFiber;
+  void *fiber;
+  bool isThreadFiber{false};
+
+  void init() { fiber = NULL; }
+  void fini() {
+    if (fiber!=nullptr && !isThreadFiber)
+      __tsan_destroy_fiber(fiber);
+  }
+
+  //  void* GetCurrentFiber(){return __tsan_get_current_fiber();}
+
+  void SwitchToFiber() {
+    if (!fiber)
+      fiber = __tsan_create_fiber(0);
+    __tsan_switch_to_fiber(fiber, 1);
+  }
+  static FiberData *getThreadFiber() {
+    if (!threadFiber) {
+      threadFiber = new FiberData(__tsan_get_current_fiber());
+    }
+    return threadFiber;
+  }
+
+  FiberData(void *newFiber) {
+    if (fiber)
+      __tsan_destroy_fiber(fiber);
+    isThreadFiber = true;
+    fiber = newFiber;
+  }
+  FiberData() {}
+  ~FiberData() {}
+  // overload new/delete to use DataPool for memory management.
+  void *operator new(size_t size) { return fdp->getData(); }
+  void operator delete(void *p, size_t) { retData<FiberData, 4>(p); }
+};
+__thread FiberData *FiberData::threadFiber{nullptr};
 
 struct ParallelData;
 __thread DataPool<ParallelData, 4> *pdp;
@@ -535,9 +633,11 @@ struct TaskData {
       // Copy over pointer to taskgroup. This task may set up its own stack
       // but for now belongs to its parent's taskgroup.
       TaskGroup = Parent->TaskGroup;
-      /*      if (archer_flags->use_fibers)
-              fiber = __tsan_create_fiber(0);*/
-      fiber = TsanCreateFiber(0);
+      if (archer_flags->use_fiberpool) {
+        fiber = new FiberData();
+      } else {
+        fiber = TsanCreateFiber(0);
+      }
     }
   }
 
@@ -545,25 +645,27 @@ struct TaskData {
       : InBarrier(false), Included(false), BarrierIndex(0), RefCount(1),
         Parent(nullptr), ImplicitTask(this), Team(Team), TaskGroup(nullptr),
         DependencyCount(0), execution(1), freed(0), fiber(nullptr) {
-    /*    if (archer_flags->use_fibers)
-          fiber = __tsan_get_current_fiber();*/
-    fiber = TsanGetCurrentFiber();
+      if (archer_flags->use_fiberpool) {
+        fiber = FiberData::getThreadFiber();
+      } else {
+        fiber = TsanGetCurrentFiber();
+      }
   }
 
   ~TaskData() {
     TsanDeleteClock(&Task);
     TsanDeleteClock(&Taskwait);
-    if (ImplicitTask != this && fiber) {
+    if (archer_flags->use_fiberpool) {
+      delete ((FiberData *)fiber);
+    } else if (ImplicitTask != this && fiber){
       TsanDestroyFiber(fiber);
     }
-    /*    if (archer_flags->use_fibers && ImplicitTask!=this && fiber)
-          __tsan_destroy_fiber(fiber);*/
   }
 
   void Activate() {
-    /*    if (archer_flags->use_fibers && fiber)
-          __tsan_switch_to_fiber(fiber, 1);*/
-    if (fiber) {
+    if (archer_flags->use_fiberpool) {
+      ((FiberData *)fiber)->SwitchToFiber();
+    } else if (fiber) {
       TsanSwitchToFiber(fiber, 1);
     }
   }
@@ -642,8 +744,14 @@ static void ompt_tsan_thread_begin(ompt_thread_t thread_type,
   TsanNewMemory(tgp, sizeof(tgp));
   tdp = new DataPool<TaskData, 4>;
   TsanNewMemory(tdp, sizeof(tdp));
-  tfp = new DataPool<TlcFiber, 4>;
-  TsanNewMemory(tfp, sizeof(tfp));
+  if (archer_flags->use_tlc_fibers) {
+    tfp = new DataPool<TlcFiber, 4>;
+    TsanNewMemory(tfp, sizeof(tfp));
+  }
+  if (archer_flags->use_fiberpool) {
+    fdp = new PDataPool<FiberData, 4>;
+    TsanNewMemory(fdp, sizeof(fdp));
+  }
   thread_data->value = my_next_id();
 }
 
@@ -651,6 +759,12 @@ static void ompt_tsan_thread_end(ompt_data_t *thread_data) {
   delete pdp;
   delete tgp;
   delete tdp;
+  if (tfp) {
+    delete tfp;
+  }
+  if (fdp) {
+    delete fdp;
+  }
 }
 
 /// OMPT event callbacks for handling parallel regions.
@@ -720,6 +834,7 @@ static void ompt_tsan_sync_region(ompt_sync_region_t kind,
     TsanFuncEntry(codeptr_ra);
     switch (kind) {
     case ompt_sync_region_barrier_implementation:
+      break;
     case ompt_sync_region_barrier_implicit:
     case ompt_sync_region_barrier_explicit:
     case ompt_sync_region_barrier: {
@@ -754,6 +869,7 @@ static void ompt_tsan_sync_region(ompt_sync_region_t kind,
     TsanFuncExit();
     switch (kind) {
     case ompt_sync_region_barrier_implementation:
+      break;
     case ompt_sync_region_barrier_implicit:
     case ompt_sync_region_barrier_explicit:
     case ompt_sync_region_barrier: {
@@ -765,8 +881,9 @@ static void ompt_tsan_sync_region(ompt_sync_region_t kind,
 
       char BarrierIndex = Data->BarrierIndex;
       // Barrier will end after it has been entered by all threads.
-      if (parallel_data)
+      if (parallel_data) {
         TsanHappensAfter(Data->Team->GetBarrierPtr(BarrierIndex));
+      }
 
       // It is not guaranteed that all threads have exited this barrier before
       // we enter the next one. So we will use a different address.
@@ -778,8 +895,9 @@ static void ompt_tsan_sync_region(ompt_sync_region_t kind,
     }
 
     case ompt_sync_region_taskwait: {
-      if (Data->execution > 1)
+      if (Data->execution > 1) {
         TsanHappensAfter(Data->GetTaskwaitPtr());
+      }
       break;
     }
 
