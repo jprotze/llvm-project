@@ -34,7 +34,7 @@
 #include "omp-tools.h"
 #include <sys/resource.h>
 
-#define DEBUG
+//#define DEBUG
 #ifdef DEBUG
 #define DPrintf(...) printf(__VA_ARGS__)
 #define DTLCPrintf(...) printf(__VA_ARGS__)
@@ -208,18 +208,22 @@ void __attribute__((weak))
 AnnotateHappensBefore(const char *file, int line, const volatile void *cv) {}
 void __attribute__((weak))
 AnnotateHappensAfterTLC(const char *file, int line, const volatile void *cv) {
+  DTLCPrintf("AnnotateHappensAfterTLC fallback to AnnotateHappensAfter\n");
   AnnotateHappensAfter(file, line, cv);
 }
 void __attribute__((weak))
 AnnotateHappensBeforeTLC(const char *file, int line, const volatile void *cv) {
+  DTLCPrintf("AnnotateHappensBeforeTLC fallback to AnnotateHappensBefore\n");
   AnnotateHappensBefore(file, line, cv);
 }
 void __attribute__((weak))
 AnnotateInitTLC(const char *file, int line, const volatile void *cv) {
+  DTLCPrintf("AnnotateInitTLC fallback to AnnotateHappensBefore\n");
   AnnotateHappensBefore(file, line, cv);
 }
 void __attribute__((weak))
 AnnotateStartTLC(const char *file, int line, const volatile void *cv) {
+  DTLCPrintf("AnnotateStartTLC fallback to AnnotateHappensAfter\n");
   AnnotateHappensAfter(file, line, cv);
 }
 void __attribute__((weak))
@@ -258,65 +262,82 @@ void *__tlc_create_fiber(unsigned flags);
 void __tlc_destroy_fiber(void *fiber);
 void __tlc_switch_to_fiber(void *fiber, unsigned flags);
 
+void *__pool_get_current_fiber();
+void *__pool_create_fiber(unsigned flags);
+void __pool_destroy_fiber(void *fiber);
+void __pool_switch_to_fiber(void *fiber, unsigned flags);
+
 #define TsanGetCurrentFiber()                                                  \
   ((archer_flags->use_fibers)                                                  \
        ? __tsan_get_current_fiber()                                            \
+       : ((archer_flags->use_fiberpool) ? __pool_get_current_fiber()           \
        : ((archer_flags->use_tlc_fibers) ? __tlc_get_current_fiber()           \
-                                         : nullptr))
+                                         : nullptr)))
 #define TsanCreateFiber(flag)                                                  \
   ((archer_flags->use_fibers)                                                  \
        ? __tsan_create_fiber(flag)                                             \
+       : ((archer_flags->use_fiberpool) ? __pool_create_fiber(flag)           \
        : ((archer_flags->use_tlc_fibers) ? __tlc_create_fiber(flag)            \
-                                         : nullptr))
+                                         : nullptr)))
 #define TsanDestroyFiber(fiber)                                                \
+  do {\
   if (archer_flags->use_fibers) {                                              \
     __tsan_destroy_fiber(fiber);                                               \
-  } else if (archer_flags->use_tlc_fibers)                                     \
-  __tlc_destroy_fiber(fiber)
+  } else if (archer_flags->use_fiberpool) {                                              \
+    __pool_destroy_fiber(fiber);                                               \
+  } else if (archer_flags->use_tlc_fibers){                                     \
+  __tlc_destroy_fiber(fiber);}}while(0)
 #define TsanSwitchToFiber(fiber, flag)                                         \
+  do {\
   if (archer_flags->use_fibers) {                                              \
     __tsan_switch_to_fiber(fiber, flag);                                       \
-  } else if (archer_flags->use_tlc_fibers)                                     \
-  __tlc_switch_to_fiber(fiber, flag)
+  } else if (archer_flags->use_fiberpool) {                                              \
+    __pool_switch_to_fiber(fiber, flag);                                               \
+  } else if (archer_flags->use_tlc_fibers){                                     \
+  __tlc_switch_to_fiber(fiber, flag);}}while(0)
 
 // This marker is used to define a happens-before arc. The race detector will
 // infer an arc from the begin to the end when they share the same pointer
 // argument.
-#define TsanHappensBefore(cv) AnnotateHappensBefore(__FILE__, __LINE__, cv)
+#define TsanHappensBefore(cv) do{AnnotateHappensBefore(__FILE__, __LINE__, cv);}while(0)
 
 // This marker defines the destination of a happens-before arc.
-#define TsanHappensAfter(cv) AnnotateHappensAfter(__FILE__, __LINE__, cv)
+#define TsanHappensAfter(cv) do{AnnotateHappensAfter(__FILE__, __LINE__, cv);}while(0)
 
 // convenience macros to handle the conditional annotation w/ or w/o TLC
 #define IfTLCBefore(f, cv)                                                     \
-  if (!archer_flags->use_tlc)                                                  \
+  do{\
+  if (!archer_flags->use_tlc){                                                  \
     AnnotateHappensBefore(__FILE__, __LINE__, cv);                             \
-  else                                                                         \
-    f(__FILE__, __LINE__, cv)
+  }else{                                                                         \
+    f(__FILE__, __LINE__, cv);\
+  }}while(0)
 
 #define IfTLCAfter(f, cv)                                                      \
-  if (!archer_flags->use_tlc)                                                  \
+  do{\
+  if (!archer_flags->use_tlc){                                                  \
     AnnotateHappensAfter(__FILE__, __LINE__, cv);                              \
-  else                                                                         \
-    f(__FILE__, __LINE__, cv)
+  }else{                                                                         \
+    f(__FILE__, __LINE__, cv);\
+  }}while(0)
 
 // This marker defines the source of a TLC aware happens-before arc.
-#define TsanHappensBeforeTLC(cv) IfTLCBefore(AnnotateHappensBeforeTLC, cv)
+#define TsanHappensBeforeTLC(cv) do{IfTLCBefore(AnnotateHappensBeforeTLC, cv);}while(0)
 
 // This marker defines the destination of a TLC aware happens-before arc.
-#define TsanHappensAfterTLC(cv) IfTLCAfter(AnnotateHappensAfterTLC, cv)
+#define TsanHappensAfterTLC(cv) do{IfTLCAfter(AnnotateHappensAfterTLC, cv);}while(0)
 
 // This marker defines the initialization of TLC execution.
-#define TsanInitTLC(cv) IfTLCBefore(AnnotateInitTLC, cv)
+#define TsanInitTLC(cv) do{IfTLCBefore(AnnotateInitTLC, cv);}while(0)
 
 // This marker defines the start of TLC execution.
-#define TsanStartTLC(cv) IfTLCAfter(AnnotateStartTLC, cv)
+#define TsanStartTLC(cv) do{IfTLCAfter(AnnotateStartTLC, cv);}while(0)
 
 // Ignore any races on writes between here and the next TsanIgnoreWritesEnd.
-#define TsanIgnoreWritesBegin() AnnotateIgnoreWritesBegin(__FILE__, __LINE__)
+#define TsanIgnoreWritesBegin() do{AnnotateIgnoreWritesBegin(__FILE__, __LINE__);}while(0)
 
 // Resume checking for racy writes.
-#define TsanIgnoreWritesEnd() AnnotateIgnoreWritesEnd(__FILE__, __LINE__)
+#define TsanIgnoreWritesEnd() do{AnnotateIgnoreWritesEnd(__FILE__, __LINE__);}while(0)
 
 // We don't really delete the clock for now
 #define TsanDeleteClock(cv)
@@ -479,11 +500,11 @@ template <typename T, int N> static void retData(void *data) {
 }
 
 struct FiberData;
-__thread PDataPool<FiberData, 4> *fdp{nullptr};
+static __thread PDataPool<FiberData, 4> *fdp{nullptr};
 
 /// Data structure to store additional information for parallel regions.
 struct FiberData {
-  static __thread FiberData *threadFiber;
+  static __thread FiberData *currentFiber;
   void *fiber;
   bool isThreadFiber{false};
 
@@ -495,16 +516,17 @@ struct FiberData {
 
   //  void* GetCurrentFiber(){return __tsan_get_current_fiber();}
 
-  void SwitchToFiber() {
+  void SwitchToFiber(int flags) {
     if (!fiber)
       fiber = __tsan_create_fiber(0);
-    __tsan_switch_to_fiber(fiber, 1);
+    __tsan_switch_to_fiber(fiber, flags);
+    currentFiber = this;
   }
-  static FiberData *getThreadFiber() {
-    if (!threadFiber) {
-      threadFiber = new FiberData(__tsan_get_current_fiber());
+  static FiberData *getCurrentFiber() {
+    if (!currentFiber) {
+      currentFiber = new FiberData(__tsan_get_current_fiber());
     }
-    return threadFiber;
+    return currentFiber;
   }
 
   FiberData(void *newFiber) {
@@ -519,7 +541,7 @@ struct FiberData {
   void *operator new(size_t size) { return fdp->getData(); }
   void operator delete(void *p, size_t) { retData<FiberData, 4>(p); }
 };
-__thread FiberData *FiberData::threadFiber{nullptr};
+__thread FiberData *FiberData::currentFiber{nullptr};
 
 struct ParallelData;
 __thread DataPool<ParallelData, 4> *pdp;
@@ -633,11 +655,7 @@ struct TaskData {
       // Copy over pointer to taskgroup. This task may set up its own stack
       // but for now belongs to its parent's taskgroup.
       TaskGroup = Parent->TaskGroup;
-      if (archer_flags->use_fiberpool) {
-        fiber = new FiberData();
-      } else {
-        fiber = TsanCreateFiber(0);
-      }
+      fiber = TsanCreateFiber(0);
     }
   }
 
@@ -645,29 +663,19 @@ struct TaskData {
       : InBarrier(false), Included(false), BarrierIndex(0), RefCount(1),
         Parent(nullptr), ImplicitTask(this), Team(Team), TaskGroup(nullptr),
         DependencyCount(0), execution(1), freed(0), fiber(nullptr) {
-      if (archer_flags->use_fiberpool) {
-        fiber = FiberData::getThreadFiber();
-      } else {
         fiber = TsanGetCurrentFiber();
-      }
   }
 
   ~TaskData() {
     TsanDeleteClock(&Task);
     TsanDeleteClock(&Taskwait);
-    if (archer_flags->use_fiberpool) {
-      delete ((FiberData *)fiber);
-    } else if (ImplicitTask != this && fiber){
+    if (ImplicitTask != this && fiber){
       TsanDestroyFiber(fiber);
     }
   }
 
   void Activate() {
-    if (archer_flags->use_fiberpool) {
-      ((FiberData *)fiber)->SwitchToFiber();
-    } else if (fiber) {
       TsanSwitchToFiber(fiber, 1);
-    }
   }
 
   void *GetTaskPtr() { return &Task; }
@@ -696,13 +704,18 @@ struct TlcFiber {
   void operator delete(void *p, size_t) { retData<TlcFiber, 4>(p); }
 };
 
-__thread TlcFiber *tlcFiber = nullptr;
+union FiberImpl{
+  TlcFiber* tlc;
+  FiberData* pool;
+  void* tsan;
+};
+__thread FiberImpl Fiber{nullptr};
 
 void *__tlc_get_current_fiber() {
   DTLCPrintf("__tlc_get_current_fiber\n");
-  if (!tlcFiber)
-    tlcFiber = new TlcFiber;
-  return tlcFiber;
+  if (!Fiber.tlc)
+    Fiber.tlc = new TlcFiber;
+  return Fiber.tlc;
 }
 void *__tlc_create_fiber(unsigned flags) {
   DTLCPrintf("__tlc_create_fiber\n");
@@ -716,12 +729,31 @@ void __tlc_destroy_fiber(void *fiber) {
 }
 void __tlc_switch_to_fiber(void *fiber, unsigned flags) {
   DTLCPrintf("__tlc_switch_fiber\n");
-  if (tlcFiber)
-    TsanHappensBefore(tlcFiber->GetPtr());
-  tlcFiber = reinterpret_cast<TlcFiber *>(fiber);
-  if (flags) {
-    AnnotateStartTLC(__FILE__, __LINE__, tlcFiber->GetPtr());
-  }
+  if (Fiber.tlc)
+    TsanHappensBefore(Fiber.tlc->GetPtr());
+  Fiber.tlc = reinterpret_cast<TlcFiber *>(fiber);
+  AnnotateStartTLC(__FILE__, __LINE__, Fiber.tlc->GetPtr());
+}
+
+void *__pool_get_current_fiber() {
+  DTLCPrintf("__pool_get_current_fiber\n");
+  if (!Fiber.pool)
+    Fiber.pool = FiberData::getCurrentFiber();
+  return Fiber.pool;
+}
+void *__pool_create_fiber(unsigned flags) {
+  DTLCPrintf("__pool_create_fiber\n");
+  FiberData *ret = new FiberData();
+  return ret;
+}
+void __pool_destroy_fiber(void *fiber) {
+  DTLCPrintf("__pool_destroy_fiber\n");
+  delete reinterpret_cast<FiberData *>(fiber);
+}
+void __pool_switch_to_fiber(void *fiber, unsigned flags) {
+  DTLCPrintf("__pool_switch_fiber\n");
+  Fiber.pool = reinterpret_cast<FiberData *>(fiber);
+  Fiber.pool->SwitchToFiber(flags);
 }
 
 static inline void *ToInAddr(void *OutAddr) {
