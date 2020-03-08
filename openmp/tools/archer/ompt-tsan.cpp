@@ -1093,17 +1093,17 @@ static void ompt_tsan_task_schedule(ompt_data_t *first_task_data,
   }
 
   // we will use new stack, assume growing down
-  if (!archer_flags->use_tlc_fibers) {
+//  if (!archer_flags->use_tlc_fibers) {
     TsanNewMemory((char *)&FromTask - 1024, 1024);
-  }
+//  }
   if (ToTask->execution == 0) {
     if (ompt_get_task_memory) {
       void *addr;
       size_t size;
       if (ompt_get_task_memory(&addr, &size, 0)) {
-        if (!archer_flags->use_tlc_fibers) {
+//        if (!archer_flags->use_tlc_fibers) {
           TsanNewMemory(addr, size);
-        }
+//        }
         DTLCPrintf("TsanNewMemory(%p, %li)\n", addr, size);
       }
     }
@@ -1115,7 +1115,7 @@ static void ompt_tsan_task_schedule(ompt_data_t *first_task_data,
     for (unsigned i = 0; i < ToTask->DependencyCount; i++) {
       ompt_dependence_t *Dependency = &ToTask->Dependencies[i];
 
-      TsanStartTLC(ToTask->GetTaskPtr());
+      TsanHappensAfter(Dependency->variable.ptr);
       // in and inout dependencies are also blocked by prior in dependencies!
       if (Dependency->dependence_type == ompt_dependence_type_out ||
           Dependency->dependence_type == ompt_dependence_type_inout) {
