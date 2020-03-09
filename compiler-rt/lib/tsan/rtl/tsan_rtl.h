@@ -25,6 +25,8 @@
 #ifndef TSAN_RTL_H
 #define TSAN_RTL_H
 
+#define TSAN_NO_LOCAL_CONCURRENCY 1
+
 #include "sanitizer_common/sanitizer_allocator.h"
 #include "sanitizer_common/sanitizer_allocator_internal.h"
 #include "sanitizer_common/sanitizer_asm.h"

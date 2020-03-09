@@ -654,8 +654,9 @@ static inline bool HappensConcurrently(Shadow old, ThreadState *thr) {
 }
 #endif
 
+template <bool tlc>
 ALWAYS_INLINE
-void MemoryAccessImpl1(ThreadState *thr, uptr addr,
+void MemoryAccessImpl1_template(ThreadState *thr, uptr addr,
     int kAccessSizeLog, bool kAccessIsWrite, bool kIsAtomic,
     u64 *shadow_mem, Shadow cur) {
   StatInc(thr, StatMop);
@@ -723,6 +724,30 @@ void MemoryAccessImpl1(ThreadState *thr, uptr addr,
   HandleRace(thr, shadow_mem, cur, old);
   return;
 }
+
+NOINLINE
+void MemoryAccessImpl1_template_tlc(ThreadState *thr, uptr addr,
+    int kAccessSizeLog, bool kAccessIsWrite, bool kIsAtomic,
+    u64 *shadow_mem, Shadow cur) {
+  MemoryAccessImpl1_template<true>(thr, addr, kAccessSizeLog, 
+      kAccessIsWrite, kIsAtomic, shadow_mem, cur);
+}
+
+ALWAYS_INLINE
+void MemoryAccessImpl1(ThreadState *thr, uptr addr,
+    int kAccessSizeLog, bool kAccessIsWrite, bool kIsAtomic,
+    u64 *shadow_mem, Shadow cur) {
+#if !defined(TSAN_NO_LOCAL_CONCURRENCY)
+  if (UNLIKELY(thr->end_concurrent.epoch > 0)) {
+    MemoryAccessImpl1_template_tlc(thr, addr, kAccessSizeLog, 
+        kAccessIsWrite, kIsAtomic, shadow_mem, cur);
+    return;
+  }
+#endif
+  MemoryAccessImpl1_template<false>(thr, addr, kAccessSizeLog, 
+      kAccessIsWrite, kIsAtomic, shadow_mem, cur);
+}
+
 
 void UnalignedMemoryAccess(ThreadState *thr, uptr pc, uptr addr,
     int size, bool kAccessIsWrite, bool kIsAtomic) {

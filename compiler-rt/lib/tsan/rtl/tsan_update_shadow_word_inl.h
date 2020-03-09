@@ -31,7 +31,7 @@ do {
     // same thread?
     if (LIKELY(Shadow::TidsAreEqual(old, cur))) {
 #if !defined(TSAN_NO_LOCAL_CONCURRENCY)
-      if (!HappensConcurrently(old, thr)) {
+      if (!tlc || !HappensConcurrently(old, thr)) {
 #endif
         StatInc(thr, StatShadowSameThread);
         if (LIKELY(old.IsRWWeakerOrEqual(kAccessIsWrite, kIsAtomic))) {
@@ -41,7 +41,7 @@ do {
         break;
 #if !defined(TSAN_NO_LOCAL_CONCURRENCY)
       }
-      if (LIKELY(old.IsBothReadsOrAtomic(kAccessIsWrite, kIsAtomic)))
+      if (tlc && LIKELY(old.IsBothReadsOrAtomic(kAccessIsWrite, kIsAtomic)))
         break;
       goto RACE;
 #endif
@@ -63,13 +63,13 @@ do {
     StatInc(thr, StatShadowIntersect);
     if (Shadow::TidsAreEqual(old, cur)) {
 #if !defined(TSAN_NO_LOCAL_CONCURRENCY)
-      if (!HappensConcurrently(old, thr)) {
+      if (!tlc || !HappensConcurrently(old, thr)) {
 #endif
         StatInc(thr, StatShadowSameThread);
         break;
 #if !defined(TSAN_NO_LOCAL_CONCURRENCY)
       }
-      if (old.IsBothReadsOrAtomic(kAccessIsWrite, kIsAtomic))
+      if (tlc && old.IsBothReadsOrAtomic(kAccessIsWrite, kIsAtomic))
         break;
       goto RACE;
 #endif

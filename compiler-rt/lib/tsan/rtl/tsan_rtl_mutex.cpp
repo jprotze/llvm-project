@@ -20,6 +20,12 @@
 #include "tsan_symbolize.h"
 #include "tsan_platform.h"
 
+#if defined(TLC_DEBUG)
+#define DTLCPrintf Printf
+#else
+#define DTLCPrintf(...)
+#endif
+
 namespace __tsan {
 
 void ReportDeadlock(ThreadState *thr, uptr pc, DDReport *r);
@@ -420,6 +426,7 @@ void Acquire(ThreadState *thr, uptr pc, uptr addr) {
 #if !defined(TSAN_NO_LOCAL_CONCURRENCY)
   thr->begin_concurrent.epoch = 0;
   thr->end_concurrent.epoch = 0;
+  DTLCPrintf("Acquire: TLC(%d, %d) %d\n", thr->begin_concurrent.epoch, thr->end_concurrent.epoch, thr->fast_state.epoch());
 #endif
 }
 
@@ -433,6 +440,7 @@ void StartConcurrent(ThreadState *thr, uptr pc, uptr addr) {
     return;
   StartConcurrentImpl(thr, pc, &s->clock);
   s->mtx.ReadUnlock();
+  DTLCPrintf("StartConcurrent: TLC(%d, %d)\n", thr->begin_concurrent.epoch, thr->end_concurrent.epoch);
 }
 #endif
 
@@ -478,6 +486,7 @@ void Release(ThreadState *thr, uptr pc, uptr addr) {
   TraceAddEvent(thr, thr->fast_state, EventTypeMop, 0);
   ReleaseImpl(thr, pc, &s->clock);
   s->mtx.Unlock();
+  DTLCPrintf("Release: clock(%d)\n", thr->fast_synch_epoch);
 }
 
 void ReleaseStore(ThreadState *thr, uptr pc, uptr addr) {
@@ -490,6 +499,7 @@ void ReleaseStore(ThreadState *thr, uptr pc, uptr addr) {
   TraceAddEvent(thr, thr->fast_state, EventTypeMop, 0);
   ReleaseStoreImpl(thr, pc, &s->clock);
   s->mtx.Unlock();
+  DTLCPrintf("ReleaseStore: clock(%d)\n", thr->fast_synch_epoch);
 }
 
 #if !SANITIZER_GO
