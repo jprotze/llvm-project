@@ -25,7 +25,7 @@
 #ifndef TSAN_RTL_H
 #define TSAN_RTL_H
 
-#define TSAN_NO_LOCAL_CONCURRENCY 1
+//#define TSAN_LOCAL_CONCURRENCY 1
 
 #include "sanitizer_common/sanitizer_allocator.h"
 #include "sanitizer_common/sanitizer_allocator_internal.h"
@@ -401,7 +401,7 @@ struct ThreadState {
   u64 racy_state[2];
   MutexSet mset;
   ThreadClock clock;
-#if !defined(TSAN_NO_LOCAL_CONCURRENCY)
+#if defined(TSAN_LOCAL_CONCURRENCY)
   ClockElem begin_concurrent;
   ClockElem end_concurrent;
 #endif

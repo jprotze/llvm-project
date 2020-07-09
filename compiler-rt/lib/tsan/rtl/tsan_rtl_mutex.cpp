@@ -208,7 +208,7 @@ void MutexPostLock(ThreadState *thr, uptr pc, uptr addr, u32 flagz, int rec) {
   s->mtx.Unlock();
   // Can't touch s after this point.
   s = 0;
-#if !defined(TSAN_NO_LOCAL_CONCURRENCY)
+#if defined(TSAN_LOCAL_CONCURRENCY)
   thr->begin_concurrent.epoch = 0;
   thr->end_concurrent.epoch = 0;
 #endif
@@ -307,7 +307,7 @@ void MutexPostReadLock(ThreadState *thr, uptr pc, uptr addr, u32 flagz) {
   s->mtx.ReadUnlock();
   // Can't touch s after this point.
   s = 0;
-#if !defined(TSAN_NO_LOCAL_CONCURRENCY)
+#if defined(TSAN_LOCAL_CONCURRENCY)
   thr->begin_concurrent.epoch = 0;
   thr->end_concurrent.epoch = 0;
 #endif
@@ -423,14 +423,14 @@ void Acquire(ThreadState *thr, uptr pc, uptr addr) {
     return;
   AcquireImpl(thr, pc, &s->clock);
   s->mtx.ReadUnlock();
-#if !defined(TSAN_NO_LOCAL_CONCURRENCY)
+#if defined(TSAN_LOCAL_CONCURRENCY)
   thr->begin_concurrent.epoch = 0;
   thr->end_concurrent.epoch = 0;
   DTLCPrintf("Acquire: TLC(%d, %d) %d\n", thr->begin_concurrent.epoch, thr->end_concurrent.epoch, thr->fast_state.epoch());
 #endif
 }
 
-#if !defined(TSAN_NO_LOCAL_CONCURRENCY)
+#if defined(TSAN_LOCAL_CONCURRENCY)
 void StartConcurrent(ThreadState *thr, uptr pc, uptr addr) {
   DPrintf("#%d: Acquire %zx\n", thr->tid, addr);
   if (thr->ignore_sync)
@@ -526,7 +526,7 @@ void AfterSleep(ThreadState *thr, uptr pc) {
 void AcquireImpl(ThreadState *thr, uptr pc, SyncClock *c) {
   if (thr->ignore_sync)
     return;
-#if !defined(TSAN_NO_LOCAL_CONCURRENCY)
+#if defined(TSAN_LOCAL_CONCURRENCY)
 #if 0
   if (c->size() > (uptr)thr->tid)
   {
@@ -560,7 +560,7 @@ void ReleaseStoreAcquireImpl(ThreadState *thr, uptr pc, SyncClock *c) {
   StatInc(thr, StatSyncReleaseStoreAcquire);
 }
 
-#if !defined(TSAN_NO_LOCAL_CONCURRENCY)
+#if defined(TSAN_LOCAL_CONCURRENCY)
 void StartConcurrentImpl(ThreadState *thr, uptr pc, SyncClock *c) {
   if (thr->ignore_sync)
     return;

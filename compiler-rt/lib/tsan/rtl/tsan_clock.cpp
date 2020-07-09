@@ -229,7 +229,7 @@ void ThreadClock::releaseStoreAcquire(ClockCache *c, SyncClock *sc) {
   }
 }
 
-#if !defined(TSAN_NO_LOCAL_CONCURRENCY)
+#if defined(TSAN_LOCAL_CONCURRENCY)
 void ThreadClock::AcquireStore(ClockCache *c, SyncClock *src) {
   DCHECK_LE(nclk_, kMaxTid);
   DCHECK_LE(src->size_, kMaxTid);
