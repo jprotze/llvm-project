@@ -378,10 +378,25 @@ std::mutex outputMutex{};
 template <typename T, int N> struct DataPool {
   std::mutex DPMutex;
   std::list<T *> DataPointer;
+  std::list<T *> RemoteDataPointer;
   std::list<void *> memory;
   int total;
+  std::atomic<int> remote;
+  int remoteReturn;
+  int localReturn;
+  
+  int getRemote(){return remoteReturn;}
+  int getLocal(){return localReturn;}
 
   virtual void newDatas() {
+    if (remote>0) {
+      DPMutex.lock();
+      remoteReturn++;
+      DataPointer.splice(DataPointer.begin(), RemoteDataPointer);
+      remote=0;
+      DPMutex.unlock();
+      return;
+    }
     // prefix the Data with a pointer to 'this', allows to return memory to
     // 'this',
     // without explicitly knowing the source.
@@ -411,41 +426,53 @@ template <typename T, int N> struct DataPool {
 
   T *getData() {
     T *ret;
-    DPMutex.lock();
     if (DataPointer.empty())
       newDatas();
     ret = DataPointer.back();
     DataPointer.pop_back();
-    DPMutex.unlock();
     return ret;
+  }
+
+  void returnOwnData(T *data) {
+    DataPointer.push_back(data);
+    localReturn++;
   }
 
   void returnData(T *data) {
     DPMutex.lock();
-    DataPointer.push_back(data);
+    RemoteDataPointer.push_back(data);
+    remote++;
+    remoteReturn++;
     DPMutex.unlock();
   }
 
   void getDatas(int n, T **datas) {
-    DPMutex.lock();
     for (int i = 0; i < n; i++) {
       if (DataPointer.empty())
         newDatas();
       datas[i] = DataPointer.back();
       DataPointer.pop_back();
     }
-    DPMutex.unlock();
+  }
+
+  void returnOwnDatas(int n, T **datas) {
+    for (int i = 0; i < n; i++) {
+      DataPointer.push_back(datas[i]);
+      localReturn++;
+    }
   }
 
   void returnDatas(int n, T **datas) {
     DPMutex.lock();
     for (int i = 0; i < n; i++) {
-      DataPointer.push_back(datas[i]);
+      RemoteDataPointer.push_back(datas[i]);
+      remote++;
+      remoteReturn++;
     }
     DPMutex.unlock();
   }
 
-  DataPool() : DPMutex(), DataPointer(), total(0) {}
+  DataPool() : DPMutex(), DataPointer(), total(0), remote(0), remoteReturn(0), localReturn(0) {}
 
   virtual ~DataPool() {
     // we assume all memory is returned when the thread finished / destructor is
@@ -797,7 +824,7 @@ static void ompt_tsan_thread_end(ompt_data_t *thread_data) {
   if (archer_flags->print_max_rss) {
     printf("MAX RSS[KBytes] during execution: %lu %lu\n", __sanitizer_get_heap_size(), __sanitizer_get_current_allocated_bytes() );
   }
-//  std::cout << thread_data->value << "tdp: " << tdp->getLocal() << " remote " << tdp->getRemote() << std::endl;
+  std::cout << thread_data->value << "tdp: " << tdp->getLocal() << " remote " << tdp->getRemote() << std::endl;
   outputMutex.unlock();
   delete pdp;
   delete tgp;
