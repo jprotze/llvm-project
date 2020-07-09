@@ -254,6 +254,9 @@ void __attribute__((weak)) __tsan_destroy_fiber(void *fiber) {
 void __attribute__((weak)) __tsan_switch_to_fiber(void *fiber, unsigned flags) {
   printf("__tsan_switch_to_fiber\n");
 }
+unsigned long __attribute__((weak)) __sanitizer_get_current_allocated_bytes() { return 0; }
+unsigned long __attribute__((weak)) __sanitizer_get_heap_size() { return 0;}
+
 #endif
 }
 
@@ -367,6 +370,8 @@ static uint64_t my_next_id() {
   uint64_t ret = __sync_fetch_and_add(&ID, 1);
   return ret;
 }
+
+std::mutex outputMutex{};
 
 // Data structure to provide a threadsafe pool of reusable objects.
 // DataPool<Type of objects, Size of blockalloc>
@@ -788,6 +793,12 @@ static void ompt_tsan_thread_begin(ompt_thread_t thread_type,
 }
 
 static void ompt_tsan_thread_end(ompt_data_t *thread_data) {
+  outputMutex.lock();
+  if (archer_flags->print_max_rss) {
+    printf("MAX RSS[KBytes] during execution: %lu %lu\n", __sanitizer_get_heap_size(), __sanitizer_get_current_allocated_bytes() );
+  }
+//  std::cout << thread_data->value << "tdp: " << tdp->getLocal() << " remote " << tdp->getRemote() << std::endl;
+  outputMutex.unlock();
   delete pdp;
   delete tgp;
   delete tdp;
@@ -1218,6 +1229,7 @@ static int ompt_tsan_initialize(ompt_function_lookup_t lookup, int device_num,
 
   SET_CALLBACK(thread_begin);
   SET_CALLBACK(thread_end);
+if (archer_flags->enabled) {
   SET_CALLBACK(parallel_begin);
   SET_CALLBACK(implicit_task);
   SET_CALLBACK(sync_region);
@@ -1231,7 +1243,7 @@ static int ompt_tsan_initialize(ompt_function_lookup_t lookup, int device_num,
   SET_CALLBACK_T(mutex_released, mutex);
   SET_OPTIONAL_CALLBACK_T(reduction, sync_region, hasReductionCallback,
                           ompt_set_never);
-
+}
   if (!tsan_flags.ignore_noninstrumented_modules)
     fprintf(stderr,
             "Warning: please export "
@@ -1255,12 +1267,12 @@ extern "C" ompt_start_tool_result_t *
 ompt_start_tool(unsigned int omp_version, const char *runtime_version) {
   const char *options = getenv("ARCHER_OPTIONS");
   archer_flags = new ArcherFlags(options);
-  if (!archer_flags->enabled) {
+/*  if (!archer_flags->enabled) {
     if (archer_flags->verbose)
       std::cout << "Archer disabled, stopping operation" << std::endl;
     delete archer_flags;
     return NULL;
-  }
+  }*/
 
   static ompt_start_tool_result_t ompt_start_tool_result = {
       &ompt_tsan_initialize, &ompt_tsan_finalize, {0}};
