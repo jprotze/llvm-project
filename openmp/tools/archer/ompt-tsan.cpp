@@ -377,8 +377,8 @@ std::mutex outputMutex{};
 // DataPool<Type of objects, Size of blockalloc>
 template <typename T, int N> struct DataPool {
   std::mutex DPMutex;
-  std::list<T *> DataPointer;
-  std::list<T *> RemoteDataPointer;
+  std::vector<T *> DataPointer;
+  std::vector<T *> RemoteDataPointer;
   std::list<void *> memory;
   int total;
   std::atomic<int> remote;
@@ -392,7 +392,7 @@ template <typename T, int N> struct DataPool {
     if (remote>0) {
       DPMutex.lock();
       remoteReturn++;
-      DataPointer.splice(DataPointer.begin(), RemoteDataPointer);
+      DataPointer.swap(RemoteDataPointer);
       remote=0;
       DPMutex.unlock();
       return;
@@ -419,7 +419,7 @@ template <typename T, int N> struct DataPool {
     memory.push_back(datas);
     for (int i = 0; i < N; i++) {
       datas[i].dp = this;
-      DataPointer.push_back(&(datas[i].data));
+      DataPointer.emplace_back(&(datas[i].data));
     }
     total += N;
   }
@@ -434,19 +434,19 @@ template <typename T, int N> struct DataPool {
   }
 
   void returnOwnData(T *data) {
-    DataPointer.push_back(data);
+    DataPointer.emplace_back(data);
     localReturn++;
   }
 
   void returnData(T *data) {
     DPMutex.lock();
-    RemoteDataPointer.push_back(data);
+    RemoteDataPointer.emplace_back(data);
     remote++;
     remoteReturn++;
     DPMutex.unlock();
   }
 
-  void getDatas(int n, T **datas) {
+/*  void getDatas(int n, T **datas) {
     for (int i = 0; i < n; i++) {
       if (DataPointer.empty())
         newDatas();
@@ -470,7 +470,7 @@ template <typename T, int N> struct DataPool {
       remoteReturn++;
     }
     DPMutex.unlock();
-  }
+  }*/
 
   DataPool() : DPMutex(), DataPointer(), total(0), remote(0), remoteReturn(0), localReturn(0) {}
 
@@ -628,6 +628,14 @@ struct Taskgroup {
 
 struct TaskData;
 __thread DataPool<TaskData, 4> *tdp;
+
+template<> void retData<TaskData, 4>(void *data) {
+  DataPool<TaskData, 4> * pool = ((DataPool<TaskData, 4> **)data)[-1];
+  if (pool == tdp)
+    pool->returnOwnData((TaskData*) data);
+  else
+    pool->returnData((TaskData*) data);
+}
 
 /// Data structure to store additional information for tasks.
 struct TaskData {
@@ -820,12 +828,12 @@ static void ompt_tsan_thread_begin(ompt_thread_t thread_type,
 }
 
 static void ompt_tsan_thread_end(ompt_data_t *thread_data) {
-  outputMutex.lock();
   if (archer_flags->print_max_rss) {
+    outputMutex.lock();
     printf("MAX RSS[KBytes] during execution: %lu %lu\n", __sanitizer_get_heap_size(), __sanitizer_get_current_allocated_bytes() );
+    std::cout << thread_data->value << "tdp: " << tdp->getLocal() << " remote " << tdp->getRemote() << std::endl;
+    outputMutex.unlock();
   }
-  std::cout << thread_data->value << "tdp: " << tdp->getLocal() << " remote " << tdp->getRemote() << std::endl;
-  outputMutex.unlock();
   delete pdp;
   delete tgp;
   delete tdp;
