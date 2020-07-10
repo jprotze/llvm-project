@@ -43,6 +43,8 @@
 #define DTLCPrintf(...)
 #endif
 
+#define OPTIMIZE_OWN 1
+
 static int runOnTsan;
 static int hasReductionCallback;
 
@@ -385,8 +387,10 @@ template <typename T, int N> struct DataPool {
   int remoteReturn;
   int localReturn;
   
-  int getRemote(){return remoteReturn;}
-  int getLocal(){return localReturn;}
+  virtual int getRemote(){return remoteReturn;}
+  virtual int getLocal(){return localReturn;}
+  virtual int getTotal(){return total;}
+  virtual int getMissing(){return total - DataPointer.size() - RemoteDataPointer.size();}
 
   virtual void newDatas() {
     if (remote>0) {
@@ -424,7 +428,7 @@ template <typename T, int N> struct DataPool {
     total += N;
   }
 
-  T *getData() {
+  virtual T *getData() {
     T *ret;
     if (DataPointer.empty())
       newDatas();
@@ -433,44 +437,18 @@ template <typename T, int N> struct DataPool {
     return ret;
   }
 
-  void returnOwnData(T *data) {
+  virtual void returnOwnData(T *data) {
     DataPointer.emplace_back(data);
     localReturn++;
   }
 
-  void returnData(T *data) {
+  virtual void returnData(T *data) {
     DPMutex.lock();
     RemoteDataPointer.emplace_back(data);
     remote++;
     remoteReturn++;
     DPMutex.unlock();
   }
-
-/*  void getDatas(int n, T **datas) {
-    for (int i = 0; i < n; i++) {
-      if (DataPointer.empty())
-        newDatas();
-      datas[i] = DataPointer.back();
-      DataPointer.pop_back();
-    }
-  }
-
-  void returnOwnDatas(int n, T **datas) {
-    for (int i = 0; i < n; i++) {
-      DataPointer.push_back(datas[i]);
-      localReturn++;
-    }
-  }
-
-  void returnDatas(int n, T **datas) {
-    DPMutex.lock();
-    for (int i = 0; i < n; i++) {
-      RemoteDataPointer.push_back(datas[i]);
-      remote++;
-      remoteReturn++;
-    }
-    DPMutex.unlock();
-  }*/
 
   DataPool() : DPMutex(), DataPointer(), total(0), remote(0), remoteReturn(0), localReturn(0) {}
 
@@ -487,6 +465,14 @@ template <typename T, int N> struct DataPool {
 // DataPool<Type of objects, Size of blockalloc>
 template <typename T, int N> struct PDataPool : public DataPool<T, N> {
   void newDatas() {
+    if (this->remote>0) {
+      this->DPMutex.lock();
+      this->remoteReturn++;
+      this->DataPointer.swap(this->RemoteDataPointer);
+      this->remote=0;
+      this->DPMutex.unlock();
+      return;
+    }
     // prefix the Data with a pointer to 'this', allows to return memory to
     // 'this',
     // without explicitly knowing the source.
@@ -533,6 +519,16 @@ template <typename T, int N> static void retData(void *data) {
 
 struct FiberData;
 static __thread PDataPool<FiberData, 4> *fdp{nullptr};
+
+template<> void retData<FiberData, 4>(void *data) {
+  PDataPool<FiberData, 4> * pool = ((PDataPool<FiberData, 4> **)data)[-1];
+#ifdef OPTIMIZE_OWN
+  if (pool == fdp)
+    pool->returnOwnData((FiberData*) data);
+  else
+#endif
+    pool->returnData((FiberData*) data);
+}
 
 /// Data structure to store additional information for parallel regions.
 struct FiberData {
@@ -631,9 +627,11 @@ __thread DataPool<TaskData, 4> *tdp;
 
 template<> void retData<TaskData, 4>(void *data) {
   DataPool<TaskData, 4> * pool = ((DataPool<TaskData, 4> **)data)[-1];
+#ifdef OPTIMIZE_OWN
   if (pool == tdp)
     pool->returnOwnData((TaskData*) data);
   else
+#endif
     pool->returnData((TaskData*) data);
 }
 
@@ -733,6 +731,16 @@ static inline TaskData *ToTaskData(ompt_data_t *task_data) {
 struct TlcFiber;
 __thread DataPool<TlcFiber, 4> *tfp;
 
+template<> void retData<TlcFiber, 4>(void *data) {
+  DataPool<TlcFiber, 4> * pool = ((DataPool<TlcFiber, 4> **)data)[-1];
+#ifdef OPTIMIZE_OWN
+  if (pool == tfp)
+    pool->returnOwnData((TlcFiber*) data);
+  else
+#endif
+    pool->returnData((TlcFiber*) data);
+}
+
 /// Data structure to support stacking of taskgroups and allow synchronization.
 struct TlcFiber {
   /// Its address is used for relationships of the taskgroup's task set.
@@ -830,8 +838,12 @@ static void ompt_tsan_thread_begin(ompt_thread_t thread_type,
 static void ompt_tsan_thread_end(ompt_data_t *thread_data) {
   if (archer_flags->print_max_rss) {
     outputMutex.lock();
-    printf("MAX RSS[KBytes] during execution: %lu %lu\n", __sanitizer_get_heap_size(), __sanitizer_get_current_allocated_bytes() );
-    std::cout << thread_data->value << "tdp: " << tdp->getLocal() << " remote " << tdp->getRemote() << std::endl;
+    printf("Bytes allocated by TSan heap_size: %lu, current_allocated_bytes: %lu\n", __sanitizer_get_heap_size(), __sanitizer_get_current_allocated_bytes() );
+    std::cout << thread_data->value << "tdp: " << tdp->getLocal() << " remote " << tdp->getRemote() << " total " << tdp->getTotal() << " missing " << tdp->getMissing() << std::endl;
+    if (archer_flags->use_tlc_fibers)
+      std::cout << thread_data->value << "tfp: " << tfp->getLocal() << " remote " << tfp->getRemote() << " total " << tfp->getTotal() << " missing " << tfp->getMissing() << std::endl;
+    if (archer_flags->use_fiberpool)
+      std::cout << thread_data->value << "fdp: " << fdp->getLocal() << " remote " << fdp->getRemote() << " total " << fdp->getTotal() << " missing " << fdp->getMissing() << std::endl;
     outputMutex.unlock();
   }
   delete pdp;
