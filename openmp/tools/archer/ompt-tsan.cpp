@@ -924,7 +924,6 @@ static void ompt_tsan_sync_region(ompt_sync_region_t kind,
     TsanFuncEntry(codeptr_ra);
     switch (kind) {
     case ompt_sync_region_barrier_implementation:
-      break;
     case ompt_sync_region_barrier_implicit:
     case ompt_sync_region_barrier_explicit:
     case ompt_sync_region_barrier: {
@@ -959,7 +958,6 @@ static void ompt_tsan_sync_region(ompt_sync_region_t kind,
     TsanFuncExit();
     switch (kind) {
     case ompt_sync_region_barrier_implementation:
-      break;
     case ompt_sync_region_barrier_implicit:
     case ompt_sync_region_barrier_explicit:
     case ompt_sync_region_barrier: {
