@@ -25,7 +25,9 @@
 #ifndef TSAN_RTL_H
 #define TSAN_RTL_H
 
-//#define TSAN_LOCAL_CONCURRENCY 1
+#if !defined(TSAN_ACQUIRESTORE) && defined(TSAN_LOCAL_CONCURRENCY)
+#define TSAN_ACQUIRESTORE 1
+#endif
 
 #include "sanitizer_common/sanitizer_allocator.h"
 #include "sanitizer_common/sanitizer_allocator_internal.h"
@@ -829,8 +831,10 @@ void ReleaseStoreAcquireImpl(ThreadState *thr, uptr pc, SyncClock *c);
 void ReleaseStoreImpl(ThreadState *thr, uptr pc, SyncClock *c);
 void AcquireReleaseImpl(ThreadState *thr, uptr pc, SyncClock *c);
 
-void StartConcurrent(ThreadState *thr, uptr pc, uptr addr);
-void StartConcurrentImpl(ThreadState *thr, uptr pc, SyncClock *c);
+#if defined(TSAN_ACQUIRESTORE)
+void AcquireStore(ThreadState *thr, uptr pc, uptr addr);
+void AcquireStoreImpl(ThreadState *thr, uptr pc, SyncClock *c);
+#endif
 
 // The hacky call uses custom calling convention and an assembly thunk.
 // It is considerably faster that a normal call for the caller

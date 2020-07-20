@@ -430,17 +430,19 @@ void Acquire(ThreadState *thr, uptr pc, uptr addr) {
 #endif
 }
 
-#if defined(TSAN_LOCAL_CONCURRENCY)
-void StartConcurrent(ThreadState *thr, uptr pc, uptr addr) {
-  DPrintf("#%d: Acquire %zx\n", thr->tid, addr);
+#if defined(TSAN_ACQUIRESTORE)
+void AcquireStore(ThreadState *thr, uptr pc, uptr addr) {
+  DPrintf("#%d: AcquireStore %zx\n", thr->tid, addr);
   if (thr->ignore_sync)
     return;
   SyncVar *s = ctx->metamap.GetIfExistsAndLock(addr, false);
   if (!s)
     return;
-  StartConcurrentImpl(thr, pc, &s->clock);
+  AcquireStoreImpl(thr, pc, &s->clock);
   s->mtx.ReadUnlock();
-  DTLCPrintf("StartConcurrent: TLC(%d, %d)\n", thr->begin_concurrent.epoch, thr->end_concurrent.epoch);
+#if defined(TSAN_LOCAL_CONCURRENCY)
+  DTLCPrintf("AcquireStore: TLC(%d, %d)\n", thr->begin_concurrent.epoch, thr->end_concurrent.epoch);
+#endif
 }
 #endif
 
@@ -560,14 +562,18 @@ void ReleaseStoreAcquireImpl(ThreadState *thr, uptr pc, SyncClock *c) {
   StatInc(thr, StatSyncReleaseStoreAcquire);
 }
 
-#if defined(TSAN_LOCAL_CONCURRENCY)
-void StartConcurrentImpl(ThreadState *thr, uptr pc, SyncClock *c) {
+#if defined(TSAN_ACQUIRESTORE)
+void AcquireStoreImpl(ThreadState *thr, uptr pc, SyncClock *c) {
   if (thr->ignore_sync)
     return;
+#if defined(TSAN_LOCAL_CONCURRENCY)
   thr->begin_concurrent.epoch = c->get(thr->tid);
   thr->end_concurrent.epoch = thr->fast_state.epoch();
-  thr->clock.AcquireStore(&thr->proc()->clock_cache, c);
   thr->clock.set(thr->end_concurrent.epoch);
+#else
+  thr->clock.set(thr->fast_state.epoch());
+#endif
+  thr->clock.acquireStore(&thr->proc()->clock_cache, c);
   StatInc(thr, StatSyncAcquire);
 }
 #endif

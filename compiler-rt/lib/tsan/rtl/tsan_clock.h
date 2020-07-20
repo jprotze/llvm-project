@@ -141,8 +141,8 @@ class ThreadClock {
   void ResetCached(ClockCache *c);
   void NoteGlobalAcquire(u64 v);
 
-#if defined(TSAN_LOCAL_CONCURRENCY)
-  void AcquireStore(ClockCache *c, SyncClock *src);
+#if defined(TSAN_ACQUIRESTORE) || defined(TSAN_LOCAL_CONCURRENCY)
+  void acquireStore(ClockCache *c, SyncClock *src);
 #endif
 
   void DebugReset();
