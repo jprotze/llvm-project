@@ -1074,35 +1074,80 @@ static void ompt_tsan_task_create(
   }
 }
 
+static void __ompt_tsan_release_task(TaskData *task) {
+  while (task != nullptr && --task->RefCount == 0) {
+    TaskData *Parent = task->Parent;
+    if (task->DependencyCount > 0) {
+      delete[] task->Dependencies;
+    }
+    delete task;
+    task = Parent;
+  }
+}
+
+static void __ompt_tsan_release_dependencies(TaskData *task) {
+  for (unsigned i = 0; i < task->DependencyCount; i++) {
+    ompt_dependence_t *Dependency = &task->Dependencies[i];
+
+    // in dependencies block following inout and out dependencies!
+    TsanHappensBefore(ToInAddr(Dependency->variable.ptr));
+    if (Dependency->dependence_type == ompt_dependence_type_out || Dependency->dependence_type == ompt_dependence_type_inout) {
+      TsanHappensBefore(Dependency->variable.ptr);
+    }
+  }
+}
+
+static void __ompt_tsan_acquire_dependencies(TaskData *task) {
+  for (unsigned i = 0; i < task->DependencyCount; i++) {
+    ompt_dependence_t *Dependency = &task->Dependencies[i];
+
+    TsanHappensAfter(Dependency->variable.ptr);
+    // in and inout dependencies are also blocked by prior in dependencies!
+    if (Dependency->dependence_type == ompt_dependence_type_out ||
+        Dependency->dependence_type == ompt_dependence_type_inout) {
+      TsanHappensAfter(ToInAddr(Dependency->variable.ptr));
+    }
+  }
+}
+
+
 static void ompt_tsan_task_schedule(ompt_data_t *first_task_data,
                                     ompt_task_status_t prior_task_status,
                                     ompt_data_t *second_task_data) {
-  TaskData *FromTask = ToTaskData(first_task_data);
-  TaskData *ToTask = ToTaskData(second_task_data);
 
-  if (ToTask->Included && prior_task_status != ompt_task_complete)
-    return; // No further synchronization for begin included tasks
-  if (FromTask->Included && prior_task_status == ompt_task_complete) {
-    // Just delete the task:
-    while (FromTask != nullptr && --FromTask->RefCount == 0) {
-      TaskData *Parent = FromTask->Parent;
-      if (FromTask->DependencyCount > 0) {
-        delete[] FromTask->Dependencies;
-      }
-      delete FromTask;
-      FromTask = Parent;
-    }
+  //
+  //  The necessary action depends on prior_task_status:
+  //
+  //    ompt_task_early_fulfill = 5,
+  //     -> ignored
+  //
+  //    ompt_task_cancel        = 3,
+  //     -> first freed, second ignored
+  //
+  //    ompt_task_late_fulfill  = 6,
+  //     -> first completed, first freed, second ignored
+  //
+  //    ompt_task_complete      = 1,
+  //     -> first completed, first freed, second starts
+  //
+  //    ompt_task_detach        = 4,
+  //    ompt_task_yield         = 2,
+  //    ompt_task_switch        = 7
+  //     -> first suspended, second starts
+  //
+
+  if (prior_task_status == ompt_task_early_fulfill)
+    return;
+
+  TaskData *FromTask = ToTaskData(first_task_data);
+
+  if (prior_task_status == ompt_task_cancel) {
+    // free the cancelled task
+    __ompt_tsan_release_task(FromTask);
     return;
   }
 
-  if (prior_task_status != ompt_task_complete) {
-    ToTask->ImplicitTask = FromTask->ImplicitTask;
-    assert(ToTask->ImplicitTask != NULL &&
-           "A task belongs to a team and has an implicit task on the stack");
-  }
-
-  // Task may be resumed at a later point in time.
-  TsanInitTLC(FromTask->GetTaskPtr());
+  // Legacy handling for missing reduction callback
 
   if (hasReductionCallback < ompt_set_always && FromTask->InBarrier) {
     // We want to ignore writes in the runtime code during barriers,
@@ -1110,48 +1155,68 @@ static void ompt_tsan_task_schedule(ompt_data_t *first_task_data,
     TsanIgnoreWritesEnd();
   }
 
-  if (prior_task_status == ompt_task_complete) { // task finished
+  // The late fulfill happens after the detached task finished execution
+  if (prior_task_status == ompt_task_late_fulfill)
+    TsanHappensAfter(FromTask->GetTaskPtr());
 
-    // Task will finish before a barrier in the surrounding parallel region ...
-    ParallelData *PData = FromTask->Team;
-    TsanHappensBefore(
-        PData->GetBarrierPtr(FromTask->ImplicitTask->BarrierIndex));
+  // task completed execution
+  if (prior_task_status == ompt_task_complete ||
+      prior_task_status == ompt_task_late_fulfill) {
+    // Included tasks are executed sequentially, no need to track
+    // synchronization
+    if (!FromTask->Included) {
+      // Task will finish before a barrier in the surrounding parallel region
+      // ...
+      ParallelData *PData = FromTask->Team;
+      TsanHappensBefore(
+          PData->GetBarrierPtr(FromTask->ImplicitTask->BarrierIndex));
 
-    // ... and before an eventual taskwait by the parent thread.
-    TsanHappensBefore(FromTask->Parent->GetTaskwaitPtr());
+      // ... and before an eventual taskwait by the parent thread.
+      TsanHappensBefore(FromTask->Parent->GetTaskwaitPtr());
 
-    if (FromTask->TaskGroup != nullptr) {
-      // This task is part of a taskgroup, so it will finish before the
-      // corresponding taskgroup_end.
-      TsanHappensBefore(FromTask->TaskGroup->GetPtr());
-    }
-    for (unsigned i = 0; i < FromTask->DependencyCount; i++) {
-      ompt_dependence_t *Dependency = &FromTask->Dependencies[i];
-
-      // in dependencies block following inout and out dependencies!
-      TsanHappensBefore(ToInAddr(Dependency->variable.ptr));
-      if (Dependency->dependence_type == ompt_dependence_type_out ||
-          Dependency->dependence_type == ompt_dependence_type_inout) {
-        TsanHappensBefore(Dependency->variable.ptr);
+      if (FromTask->TaskGroup != nullptr) {
+        // This task is part of a taskgroup, so it will finish before the
+        // corresponding taskgroup_end.
+        TsanHappensBefore(FromTask->TaskGroup->GetPtr());
       }
     }
-    ToTask->Activate(); // must switch to next task before deleting the previous
-    while (FromTask != nullptr && --FromTask->RefCount == 0) {
-      TaskData *Parent = FromTask->Parent;
-      if (FromTask->DependencyCount > 0) {
-        delete[] FromTask->Dependencies;
-      }
-      delete FromTask;
-      FromTask = Parent;
-    }
+
+    // release dependencies
+    __ompt_tsan_release_dependencies(FromTask);
+    if (prior_task_status == ompt_task_complete && !FromTask->Included)
+      ToTaskData(second_task_data)->Activate(); // must switch to next task before deleting the previous
+    // free the previously running task
+    __ompt_tsan_release_task(FromTask);
   } else {
-    ToTask->Activate();
+    if (!(ToTaskData(second_task_data)->Included && ToTaskData(second_task_data)->execution == 0))
+      ToTaskData(second_task_data)->Activate(); // must switch to next task before deleting the previous
   }
 
-  // we will use new stack, assume growing down
-//  if (!archer_flags->use_tlc_fibers) {
-    TsanNewMemory((char *)&FromTask - 1024, 1024);
-//  }
+  // For late fulfill of detached task, there is no task to schedule to
+  if (prior_task_status == ompt_task_late_fulfill) {
+    return;
+  }
+
+
+  TaskData *ToTask = ToTaskData(second_task_data);
+  // Legacy handling for missing reduction callback
+  if (hasReductionCallback < ompt_set_always && ToTask->InBarrier) {
+    // We re-enter runtime code which currently performs a barrier.
+    TsanIgnoreWritesBegin();
+  }
+
+  // task suspended
+  if (prior_task_status == ompt_task_switch ||
+      prior_task_status == ompt_task_yield ||
+      prior_task_status == ompt_task_detach) {
+    // Task may be resumed at a later point in time.
+    TsanInitTLC(FromTask->GetTaskPtr());
+    ToTask->ImplicitTask = FromTask->ImplicitTask;
+    assert(ToTask->ImplicitTask != NULL &&
+           "A task belongs to a team and has an implicit task on the stack");
+  }
+
+  // Handle dependencies on first execution of the task
   if (ToTask->execution == 0) {
     if (ompt_get_task_memory) {
       void *addr;
@@ -1164,32 +1229,20 @@ static void ompt_tsan_task_schedule(ompt_data_t *first_task_data,
       }
     }
     ToTask->execution++;
-    // 1. Task will begin execution after it has been created.
     if (!archer_flags->use_tlc_fibers) {
+      // 1. Task will begin execution after it has been created.
       TsanStartTLC(ToTask->GetTaskPtr());
     }
-    for (unsigned i = 0; i < ToTask->DependencyCount; i++) {
-      ompt_dependence_t *Dependency = &ToTask->Dependencies[i];
-
-      TsanHappensAfter(Dependency->variable.ptr);
-      // in and inout dependencies are also blocked by prior in dependencies!
-      if (Dependency->dependence_type == ompt_dependence_type_out ||
-          Dependency->dependence_type == ompt_dependence_type_inout) {
-        TsanHappensAfter(ToInAddr(Dependency->variable.ptr));
-      }
-    }
+    __ompt_tsan_acquire_dependencies(ToTask);
   } else {
     // 2. Task will resume after it has been switched away.
     if (!archer_flags->use_tlc_fibers) {
       TsanStartTLC(ToTask->GetTaskPtr());
     }
-  }
-
-  if (hasReductionCallback < ompt_set_always && ToTask->InBarrier) {
-    // We re-enter runtime code which currently performs a barrier.
-    TsanIgnoreWritesBegin();
-  }
+   }
 }
+
+
 
 static void ompt_tsan_dependences(ompt_data_t *task_data,
                                   const ompt_dependence_t *deps, int ndeps) {
