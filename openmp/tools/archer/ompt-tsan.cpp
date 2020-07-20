@@ -33,6 +33,9 @@
 
 #include "omp-tools.h"
 #include <sys/resource.h>
+#include <time.h>
+#include <sys/time.h>
+
 
 //#define DEBUG
 #ifdef DEBUG
@@ -1305,6 +1308,10 @@ static void ompt_tsan_mutex_released(ompt_mutex_t kind, ompt_wait_id_t wait_id,
 
 static int ompt_tsan_initialize(ompt_function_lookup_t lookup, int device_num,
                                 ompt_data_t *tool_data) {
+  struct timespec start;
+  clock_gettime(CLOCK_REALTIME, &start);
+  tool_data->value=start.tv_sec*1000000000+start.tv_nsec;
+  
   const char *options = getenv("TSAN_OPTIONS");
   TsanFlags tsan_flags(options);
 
@@ -1355,6 +1362,10 @@ static void ompt_tsan_finalize(ompt_data_t *tool_data) {
     struct rusage end;
     getrusage(RUSAGE_SELF, &end);
     printf("MAX RSS[KBytes] during execution: %ld\n", end.ru_maxrss);
+
+    struct timespec stop;
+    clock_gettime(CLOCK_REALTIME, &stop);
+    printf("Execution time: %09li ns\n", stop.tv_sec*1000000000+stop.tv_nsec - tool_data->value);
   }
 
   if (archer_flags)
