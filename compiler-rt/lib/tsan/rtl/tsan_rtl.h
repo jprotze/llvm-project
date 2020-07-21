@@ -717,6 +717,7 @@ void Initialize(ThreadState *thr);
 void MaybeSpawnBackgroundThread();
 int Finalize(ThreadState *thr);
 
+void OnAnnAlloc(ThreadState *thr, uptr pc, uptr p, uptr sz, bool write);
 void OnUserAlloc(ThreadState *thr, uptr pc, uptr p, uptr sz, bool write);
 void OnUserFree(ThreadState *thr, uptr pc, uptr p, bool write);
 
@@ -822,6 +823,8 @@ void ReleaseStoreAcquireImpl(ThreadState *thr, uptr pc, SyncClock *c);
 void ReleaseStoreImpl(ThreadState *thr, uptr pc, SyncClock *c);
 void AcquireReleaseImpl(ThreadState *thr, uptr pc, SyncClock *c);
 
+void AcquireStore(ThreadState *thr, uptr pc, uptr addr);
+void AcquireStoreImpl(ThreadState *thr, uptr pc, SyncClock *c);
 // The hacky call uses custom calling convention and an assembly thunk.
 // It is considerably faster that a normal call for the caller
 // if it is not executed (it is intended for slow paths from hot functions).

@@ -411,6 +411,16 @@ void Acquire(ThreadState *thr, uptr pc, uptr addr) {
   s->mtx.ReadUnlock();
 }
 
+void AcquireStore(ThreadState *thr, uptr pc, uptr addr) {
+  DPrintf("#%d: AcquireStore %zx\n", thr->tid, addr);
+  if (thr->ignore_sync)
+    return;
+  SyncVar *s = ctx->metamap.GetIfExistsAndLock(addr, false);
+  if (!s)
+    return;
+  AcquireStoreImpl(thr, pc, &s->clock);
+  s->mtx.ReadUnlock();
+}
 static void UpdateClockCallback(ThreadContextBase *tctx_base, void *arg) {
   ThreadState *thr = reinterpret_cast<ThreadState*>(arg);
   ThreadContext *tctx = static_cast<ThreadContext*>(tctx_base);
@@ -503,6 +513,14 @@ void ReleaseStoreAcquireImpl(ThreadState *thr, uptr pc, SyncClock *c) {
   thr->fast_synch_epoch = thr->fast_state.epoch();
   thr->clock.releaseStoreAcquire(&thr->proc()->clock_cache, c);
   StatInc(thr, StatSyncReleaseStoreAcquire);
+}
+
+void AcquireStoreImpl(ThreadState *thr, uptr pc, SyncClock *c) {
+  if (thr->ignore_sync)
+    return;
+  thr->clock.set(thr->fast_state.epoch());
+  thr->clock.acquireStore(&thr->proc()->clock_cache, c);
+  StatInc(thr, StatSyncAcquire);
 }
 
 void ReleaseImpl(ThreadState *thr, uptr pc, SyncClock *c) {

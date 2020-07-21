@@ -233,6 +233,16 @@ void INTERFACE_ATTRIBUTE AnnotateHappensAfter(char *f, int l, uptr addr) {
   Acquire(thr, pc, addr);
 }
 
+void INTERFACE_ATTRIBUTE AnnotateInitTLC(char *f, int l, uptr addr) {
+  SCOPED_ANNOTATION(AnnotateHappensBefore);
+  ReleaseStore(thr, pc, addr);
+}
+
+void INTERFACE_ATTRIBUTE AnnotateStartTLC(char *f, int l, uptr addr) {
+  SCOPED_ANNOTATION(AnnotateHappensAfter);
+  AcquireStore(thr, pc, addr);
+}
+
 void INTERFACE_ATTRIBUTE AnnotateCondVarSignal(char *f, int l, uptr cv) {
   SCOPED_ANNOTATION(AnnotateCondVarSignal);
 }
@@ -294,6 +304,7 @@ void INTERFACE_ATTRIBUTE AnnotateFlushState(char *f, int l) {
 void INTERFACE_ATTRIBUTE AnnotateNewMemory(char *f, int l, uptr mem,
                                            uptr size) {
   SCOPED_ANNOTATION(AnnotateNewMemory);
+  OnAnnAlloc(thr, pc, mem, size, false);
 }
 
 void INTERFACE_ATTRIBUTE AnnotateNoOp(char *f, int l, uptr mem) {

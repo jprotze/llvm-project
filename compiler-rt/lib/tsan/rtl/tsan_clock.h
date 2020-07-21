@@ -141,6 +141,7 @@ class ThreadClock {
   void ResetCached(ClockCache *c);
   void NoteGlobalAcquire(u64 v);
 
+  void acquireStore(ClockCache *c, SyncClock *src);
   void DebugReset();
   void DebugDump(int(*printf)(const char *s, ...));
 
