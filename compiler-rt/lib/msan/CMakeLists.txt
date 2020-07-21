@@ -71,10 +71,10 @@ foreach(arch ${MSAN_SUPPORTED_ARCH})
   if(SANITIZER_USE_SYMBOLS)
     add_sanitizer_rt_symbols(clang_rt.msan
       ARCHS ${arch}
-      EXTRA msan.syms.extra)
+      EXTRA msan.syms.extra ../sanitizer_common/common_san.syms.extra)
     add_sanitizer_rt_symbols(clang_rt.msan_cxx
       ARCHS ${arch}
-      EXTRA msan.syms.extra)
+      EXTRA msan.syms.extra ../sanitizer_common/common_san.syms.extra)
     add_dependencies(msan clang_rt.msan-${arch}-symbols
                           clang_rt.msan_cxx-${arch}-symbols)
   endif()

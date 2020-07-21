@@ -36,7 +36,7 @@ foreach(arch ${DFSAN_SUPPORTED_ARCH})
     PARENT_TARGET dfsan)
   add_sanitizer_rt_symbols(clang_rt.dfsan
     ARCHS ${arch}
-    EXTRA dfsan.syms.extra)
+    EXTRA dfsan.syms.extra ../sanitizer_common/common_san.syms.extra)
   add_dependencies(dfsan
     clang_rt.dfsan-${arch}-symbols)
 endforeach()

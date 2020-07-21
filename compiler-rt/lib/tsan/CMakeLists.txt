@@ -227,10 +227,10 @@ else()
                                        clang_rt.tsan_cxx-${arch})
     add_sanitizer_rt_symbols(clang_rt.tsan
       ARCHS ${arch}
-      EXTRA rtl/tsan.syms.extra)
+      EXTRA rtl/tsan.syms.extra ../sanitizer_common/common_san.syms.extra)
     add_sanitizer_rt_symbols(clang_rt.tsan_cxx
       ARCHS ${arch}
-      EXTRA rtl/tsan.syms.extra)
+      EXTRA rtl/tsan.syms.extra ../sanitizer_common/common_san.syms.extra)
     add_dependencies(tsan clang_rt.tsan-${arch}
                           clang_rt.tsan_cxx-${arch}
                           clang_rt.tsan-${arch}-symbols

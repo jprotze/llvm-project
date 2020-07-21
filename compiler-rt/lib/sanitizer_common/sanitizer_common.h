@@ -215,7 +215,8 @@ bool ColorizeReports();
 void RemoveANSIEscapeSequencesFromString(char *buffer);
 void Printf(const char *format, ...);
 void Report(const char *format, ...);
-void SetPrintfAndReportCallback(void (*callback)(const char *));
+SANITIZER_INTERFACE_ATTRIBUTE void SetPrintfAndReportCallback(
+    void (*callback)(const char *));
 #define VReport(level, ...)                                              \
   do {                                                                   \
     if ((uptr)Verbosity() >= (level)) Report(__VA_ARGS__); \
