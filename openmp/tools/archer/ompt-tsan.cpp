@@ -31,9 +31,9 @@
 #include <dlfcn.h>
 #endif
 
-#include <unistd.h>
-#include <sys/resource.h>
 #include "omp-tools.h"
+#include <sys/resource.h>
+#include <unistd.h>
 
 static int runOnTsan;
 static int hasReductionCallback;
@@ -224,8 +224,10 @@ void __attribute__((weak)) __tsan_destroy_fiber(void *fiber) {
 void __attribute__((weak)) __tsan_switch_to_fiber(void *fiber, unsigned flags) {
   printf("__tsan_switch_to_fiber\n");
 }
-unsigned long __attribute__((weak)) __sanitizer_get_current_allocated_bytes() { return 0; }
-unsigned long __attribute__((weak)) __sanitizer_get_heap_size() { return 0;}
+unsigned long __attribute__((weak)) __sanitizer_get_current_allocated_bytes() {
+  return 0;
+}
+unsigned long __attribute__((weak)) __sanitizer_get_heap_size() { return 0; }
 
 #endif
 }
@@ -235,22 +237,24 @@ void *__pool_create_fiber(unsigned flags);
 void __pool_destroy_fiber(void *fiber);
 void __pool_switch_to_fiber(void *fiber, unsigned flags);
 
-#define TsanGetCurrentFiber()                                                  \
-        __pool_get_current_fiber()
-#define TsanCreateFiber(flag)                                                  \
-        __pool_create_fiber(flag)
-#define TsanDestroyFiber(fiber)                                                \
-        __pool_destroy_fiber(fiber)
-#define TsanSwitchToFiber(fiber, flag)                                         \
-        __pool_switch_to_fiber(fiber, flag)
+#define TsanGetCurrentFiber() __pool_get_current_fiber()
+#define TsanCreateFiber(flag) __pool_create_fiber(flag)
+#define TsanDestroyFiber(fiber) __pool_destroy_fiber(fiber)
+#define TsanSwitchToFiber(fiber, flag) __pool_switch_to_fiber(fiber, flag)
 
 // This marker is used to define a happens-before arc. The race detector will
 // infer an arc from the begin to the end when they share the same pointer
 // argument.
-#define TsanHappensBefore(cv) do{AnnotateHappensBefore(__FILE__, __LINE__, cv);}while(0)
+#define TsanHappensBefore(cv)                                                  \
+  do {                                                                         \
+    AnnotateHappensBefore(__FILE__, __LINE__, cv);                             \
+  } while (0)
 
 // This marker defines the destination of a happens-before arc.
-#define TsanHappensAfter(cv) do{AnnotateHappensAfter(__FILE__, __LINE__, cv);}while(0)
+#define TsanHappensAfter(cv)                                                   \
+  do {                                                                         \
+    AnnotateHappensAfter(__FILE__, __LINE__, cv);                              \
+  } while (0)
 
 // This marker defines the initialization of TLC execution.
 #define TsanHappensBeforeReset(cv) AnnotateInitTLC(__FILE__, __LINE__, cv)
@@ -259,10 +263,16 @@ void __pool_switch_to_fiber(void *fiber, unsigned flags);
 #define TsanHappensAfterReset(cv) AnnotateStartTLC(__FILE__, __LINE__, cv)
 
 // Ignore any races on writes between here and the next TsanIgnoreWritesEnd.
-#define TsanIgnoreWritesBegin() do{AnnotateIgnoreWritesBegin(__FILE__, __LINE__);}while(0)
+#define TsanIgnoreWritesBegin()                                                \
+  do {                                                                         \
+    AnnotateIgnoreWritesBegin(__FILE__, __LINE__);                             \
+  } while (0)
 
 // Resume checking for racy writes.
-#define TsanIgnoreWritesEnd() do{AnnotateIgnoreWritesEnd(__FILE__, __LINE__);}while(0)
+#define TsanIgnoreWritesEnd()                                                  \
+  do {                                                                         \
+    AnnotateIgnoreWritesEnd(__FILE__, __LINE__);                               \
+  } while (0)
 
 // We don't really delete the clock for now
 #define TsanDeleteClock(cv)
@@ -298,7 +308,7 @@ std::mutex outputMutex{};
 static int pagesize{0};
 // Data structure to provide a threadsafe pool of reusable objects.
 // DataPool<Type of objects, Size of blockalloc in pages>
-template <typename T, int N=1> struct DataPool {
+template <typename T, int N = 1> struct DataPool {
   std::mutex DPMutex;
   // store unused objects
   std::vector<T *> DataPointer;
@@ -310,11 +320,13 @@ template <typename T, int N=1> struct DataPool {
   std::atomic<int> remote;
   int remoteReturn;
   int localReturn;
-  
-  virtual int getRemote(){return remoteReturn+remote;}
-  virtual int getLocal(){return localReturn;}
-  virtual int getTotal(){return total;}
-  virtual int getMissing(){return total - DataPointer.size() - RemoteDataPointer.size();}
+
+  virtual int getRemote() { return remoteReturn + remote; }
+  virtual int getLocal() { return localReturn; }
+  virtual int getTotal() { return total; }
+  virtual int getMissing() {
+    return total - DataPointer.size() - RemoteDataPointer.size();
+  }
 
   // prefix the Data with a pointer to 'this', allows to return memory to
   // 'this',
@@ -334,11 +346,11 @@ template <typename T, int N=1> struct DataPool {
   };
 
   virtual void newDatas() {
-    if (remote>0) {
+    if (remote > 0) {
       DPMutex.lock();
       remoteReturn++;
       DataPointer.swap(RemoteDataPointer);
-      remote=0;
+      remote = 0;
       DPMutex.unlock();
       return;
     }
@@ -350,7 +362,7 @@ template <typename T, int N=1> struct DataPool {
     char *datas = (char *)malloc(ndatas * paddedSize);
     memory.push_back(datas);
     for (int i = 0; i < ndatas; i++) {
-      pooldata& tmp = *(pooldata *)(datas + i*paddedSize);
+      pooldata &tmp = *(pooldata *)(datas + i * paddedSize);
       tmp.dp = this;
       DataPointer.push_back(&(tmp.data));
     }
@@ -380,12 +392,15 @@ template <typename T, int N=1> struct DataPool {
   }
 
   // This function takes care to return the data to the originating DataPool
-  // A pointer to the originating DataPool is stored just before the actual data.
+  // A pointer to the originating DataPool is stored just before the actual
+  // data.
   static void retData(void *data) {
     ((DataPool<T, N> **)data)[-1]->returnData((T *)data);
   }
 
-  DataPool() : DPMutex(), DataPointer(), total(0), remote(0), remoteReturn(0), localReturn(0) {}
+  DataPool()
+      : DPMutex(), DataPointer(), total(0), remote(0), remoteReturn(0),
+        localReturn(0) {}
 
   virtual ~DataPool() {
     // we assume all memory is returned when the thread finished / destructor is
@@ -400,11 +415,11 @@ template <typename T, int N=1> struct DataPool {
 // DataPool<Type of objects, Size of blockalloc>
 template <typename T, int N> struct PDataPool : public DataPool<T, N> {
   void newDatas() {
-    if (this->remote>0) {
+    if (this->remote > 0) {
       this->DPMutex.lock();
       this->remoteReturn++;
       this->DataPointer.swap(this->RemoteDataPointer);
-      this->remote=0;
+      this->remote = 0;
       this->DPMutex.unlock();
       return;
     }
@@ -455,12 +470,12 @@ template <typename T, int N> static void retData(void *data) {
 struct FiberData;
 static __thread PDataPool<FiberData, 4> *fdp{nullptr};
 
-template<> void retData<FiberData, 4>(void *data) {
-  PDataPool<FiberData, 4> * pool = ((PDataPool<FiberData, 4> **)data)[-1];
+template <> void retData<FiberData, 4>(void *data) {
+  PDataPool<FiberData, 4> *pool = ((PDataPool<FiberData, 4> **)data)[-1];
   if (pool == fdp)
-    pool->returnOwnData((FiberData*) data);
+    pool->returnOwnData((FiberData *)data);
   else
-    pool->returnData((FiberData*) data);
+    pool->returnData((FiberData *)data);
 }
 
 /// Data structure to store additional information for parallel regions.
@@ -471,7 +486,7 @@ struct FiberData {
 
   void init() { fiber = NULL; }
   void fini() {
-    if (fiber!=nullptr && !isThreadFiber)
+    if (fiber != nullptr && !isThreadFiber)
       __tsan_destroy_fiber(fiber);
   }
 
@@ -561,12 +576,12 @@ struct TaskData;
 typedef DataPool<TaskData> TaskDataPool;
 __thread TaskDataPool *tdp;
 
-template<> void retData<TaskData, 1>(void *data) {
-  TaskDataPool * pool = ((TaskDataPool **)data)[-1];
+template <> void retData<TaskData, 1>(void *data) {
+  TaskDataPool *pool = ((TaskDataPool **)data)[-1];
   if (pool == tdp)
-    pool->returnOwnData((TaskData*) data);
+    pool->returnOwnData((TaskData *)data);
   else
-    pool->returnData((TaskData*) data);
+    pool->returnData((TaskData *)data);
 }
 
 /// Data structure to store additional information for tasks.
@@ -618,8 +633,7 @@ struct TaskData {
 
   void *fiber;
 
-  TaskData(TaskData *Parent)
-      : Parent(Parent), Team(Parent->Team){
+  TaskData(TaskData *Parent) : Parent(Parent), Team(Parent->Team) {
     if (Parent != nullptr) {
       Parent->RefCount++;
       // Copy over pointer to taskgroup. This task may set up its own stack
@@ -631,7 +645,7 @@ struct TaskData {
   }
 
   TaskData(ParallelData *Team = nullptr)
-      : ImplicitTask(this), Team(Team), execution(1){
+      : ImplicitTask(this), Team(Team), execution(1) {
     if (archer_flags->tasking)
       fiber = TsanGetCurrentFiber();
   }
@@ -639,7 +653,7 @@ struct TaskData {
   ~TaskData() {
     TsanDeleteClock(&Task);
     TsanDeleteClock(&Taskwait);
-    if (archer_flags->tasking && ImplicitTask != this && fiber){
+    if (archer_flags->tasking && ImplicitTask != this && fiber) {
       TsanDestroyFiber(fiber);
     }
   }
@@ -661,7 +675,7 @@ static inline TaskData *ToTaskData(ompt_data_t *task_data) {
   return reinterpret_cast<TaskData *>(task_data->ptr);
 }
 
-__thread FiberData* Fiber{nullptr};
+__thread FiberData *Fiber{nullptr};
 
 void *__pool_get_current_fiber() {
   if (!Fiber)
@@ -710,10 +724,18 @@ static void ompt_tsan_thread_begin(ompt_thread_t thread_type,
 static void ompt_tsan_thread_end(ompt_data_t *thread_data) {
   if (archer_flags->print_max_rss) {
     outputMutex.lock();
-    printf("Bytes allocated by TSan heap_size: %lu, current_allocated_bytes: %lu\n", __sanitizer_get_heap_size(), __sanitizer_get_current_allocated_bytes() );
-    std::cout << thread_data->value << "tdp: " << tdp->getLocal() << " remote " << tdp->getRemote() << " total " << tdp->getTotal() << " missing " << tdp->getMissing() << std::endl;
+    printf("Bytes allocated by TSan heap_size: %lu, current_allocated_bytes: "
+           "%lu\n",
+           __sanitizer_get_heap_size(),
+           __sanitizer_get_current_allocated_bytes());
+    std::cout << thread_data->value << "tdp: " << tdp->getLocal() << " remote "
+              << tdp->getRemote() << " total " << tdp->getTotal() << " missing "
+              << tdp->getMissing() << std::endl;
     if (archer_flags->tasking)
-      std::cout << thread_data->value << "fdp: " << fdp->getLocal() << " remote " << fdp->getRemote() << " total " << fdp->getTotal() << " missing " << fdp->getMissing() << std::endl;
+      std::cout << thread_data->value << "fdp: " << fdp->getLocal()
+                << " remote " << fdp->getRemote() << " total "
+                << fdp->getTotal() << " missing " << fdp->getMissing()
+                << std::endl;
     outputMutex.unlock();
   }
   delete pdp;
@@ -960,7 +982,8 @@ static void __ompt_tsan_release_dependencies(TaskData *task) {
 
     // in dependencies block following inout and out dependencies!
     TsanHappensBefore(ToInAddr(Dependency->variable.ptr));
-    if (Dependency->dependence_type == ompt_dependence_type_out || Dependency->dependence_type == ompt_dependence_type_inout) {
+    if (Dependency->dependence_type == ompt_dependence_type_out ||
+        Dependency->dependence_type == ompt_dependence_type_inout) {
       TsanHappensBefore(Dependency->variable.ptr);
     }
   }
@@ -978,7 +1001,6 @@ static void __ompt_tsan_acquire_dependencies(TaskData *task) {
     }
   }
 }
-
 
 static void ompt_tsan_task_schedule(ompt_data_t *first_task_data,
                                     ompt_task_status_t prior_task_status,
@@ -1053,19 +1075,21 @@ static void ompt_tsan_task_schedule(ompt_data_t *first_task_data,
     // release dependencies
     __ompt_tsan_release_dependencies(FromTask);
     if (prior_task_status == ompt_task_complete && !FromTask->Included)
-      ToTaskData(second_task_data)->Activate(); // must switch to next task before deleting the previous
+      ToTaskData(second_task_data)
+          ->Activate(); // must switch to next task before deleting the previous
     // free the previously running task
     __ompt_tsan_release_task(FromTask);
   } else {
-    if (!(ToTaskData(second_task_data)->Included && ToTaskData(second_task_data)->execution == 0))
-      ToTaskData(second_task_data)->Activate(); // must switch to next task before deleting the previous
+    if (!(ToTaskData(second_task_data)->Included &&
+          ToTaskData(second_task_data)->execution == 0))
+      ToTaskData(second_task_data)
+          ->Activate(); // must switch to next task before deleting the previous
   }
 
   // For late fulfill of detached task, there is no task to schedule to
   if (prior_task_status == ompt_task_late_fulfill) {
     return;
   }
-
 
   TaskData *ToTask = ToTaskData(second_task_data);
   // Legacy handling for missing reduction callback
@@ -1091,7 +1115,7 @@ static void ompt_tsan_task_schedule(ompt_data_t *first_task_data,
       void *addr;
       size_t size;
       if (ompt_get_task_memory(&addr, &size, 0)) {
-          TsanNewMemory(addr, size);
+        TsanNewMemory(addr, size);
       }
     }
     ToTask->execution++;
@@ -1103,8 +1127,6 @@ static void ompt_tsan_task_schedule(ompt_data_t *first_task_data,
     TsanHappensAfterReset(ToTask->GetTaskPtr());
   }
 }
-
-
 
 static void ompt_tsan_dependences(ompt_data_t *task_data,
                                   const ompt_dependence_t *deps, int ndeps) {
@@ -1169,8 +1191,8 @@ static int ompt_tsan_initialize(ompt_function_lookup_t lookup, int device_num,
                                 ompt_data_t *tool_data) {
   struct timespec start;
   clock_gettime(CLOCK_REALTIME, &start);
-  tool_data->value=start.tv_sec*1000000000+start.tv_nsec;
-  
+  tool_data->value = start.tv_sec * 1000000000 + start.tv_nsec;
+
   const char *options = getenv("TSAN_OPTIONS");
   TsanFlags tsan_flags(options);
 
@@ -1193,21 +1215,21 @@ static int ompt_tsan_initialize(ompt_function_lookup_t lookup, int device_num,
 
   SET_CALLBACK(thread_begin);
   SET_CALLBACK(thread_end);
-if (archer_flags->enabled) {
-  SET_CALLBACK(parallel_begin);
-  SET_CALLBACK(implicit_task);
-  SET_CALLBACK(sync_region);
-  SET_CALLBACK(parallel_end);
+  if (archer_flags->enabled) {
+    SET_CALLBACK(parallel_begin);
+    SET_CALLBACK(implicit_task);
+    SET_CALLBACK(sync_region);
+    SET_CALLBACK(parallel_end);
 
-  SET_CALLBACK(task_create);
-  SET_CALLBACK(task_schedule);
-  SET_CALLBACK(dependences);
+    SET_CALLBACK(task_create);
+    SET_CALLBACK(task_schedule);
+    SET_CALLBACK(dependences);
 
-  SET_CALLBACK_T(mutex_acquired, mutex);
-  SET_CALLBACK_T(mutex_released, mutex);
-  SET_OPTIONAL_CALLBACK_T(reduction, sync_region, hasReductionCallback,
-                          ompt_set_never);
-}
+    SET_CALLBACK_T(mutex_acquired, mutex);
+    SET_CALLBACK_T(mutex_released, mutex);
+    SET_OPTIONAL_CALLBACK_T(reduction, sync_region, hasReductionCallback,
+                            ompt_set_never);
+  }
   if (!tsan_flags.ignore_noninstrumented_modules)
     fprintf(stderr,
             "Warning: please export "
@@ -1224,7 +1246,8 @@ static void ompt_tsan_finalize(ompt_data_t *tool_data) {
 
     struct timespec stop;
     clock_gettime(CLOCK_REALTIME, &stop);
-    printf("Execution time: %09li ns\n", stop.tv_sec*1000000000+stop.tv_nsec - tool_data->value);
+    printf("Execution time: %09li ns\n",
+           stop.tv_sec * 1000000000 + stop.tv_nsec - tool_data->value);
   }
 
   if (archer_flags)
@@ -1235,15 +1258,15 @@ extern "C" ompt_start_tool_result_t *
 ompt_start_tool(unsigned int omp_version, const char *runtime_version) {
   const char *options = getenv("ARCHER_OPTIONS");
   archer_flags = new ArcherFlags(options);
-/*  if (!archer_flags->enabled) {
-    if (archer_flags->verbose)
-      std::cout << "Archer disabled, stopping operation" << std::endl;
-    delete archer_flags;
-    return NULL;
-  }*/
+  /*  if (!archer_flags->enabled) {
+      if (archer_flags->verbose)
+        std::cout << "Archer disabled, stopping operation" << std::endl;
+      delete archer_flags;
+      return NULL;
+    }*/
 
   pagesize = getpagesize();
-  
+
   static ompt_start_tool_result_t ompt_start_tool_result = {
       &ompt_tsan_initialize, &ompt_tsan_finalize, {0}};
   runOnTsan = 1;
