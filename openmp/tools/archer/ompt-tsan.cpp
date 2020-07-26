@@ -258,9 +258,11 @@ void __pool_switch_to_fiber(void *fiber, unsigned flags);
 
 // This marker defines the initialization of TLC execution.
 #define TsanHappensBeforeReset(cv) AnnotateInitTLC(__FILE__, __LINE__, cv)
+//#define TsanHappensBeforeReset(cv) AnnotateHappensBefore(__FILE__, __LINE__, cv)
 
 // This marker defines the start of TLC execution.
 #define TsanHappensAfterReset(cv) AnnotateStartTLC(__FILE__, __LINE__, cv)
+//#define TsanHappensAfterReset(cv) AnnotateHappensAfter(__FILE__, __LINE__, cv)
 
 // Ignore any races on writes between here and the next TsanIgnoreWritesEnd.
 #define TsanIgnoreWritesBegin()                                                \
@@ -519,6 +521,56 @@ struct FiberData {
 };
 __thread FiberData *FiberData::currentFiber{nullptr};
 
+struct DependencyData;
+typedef DataPool<DependencyData> DependencyDataPool;
+__thread DependencyDataPool *ddp;
+
+/// Data structure to store additional information for task dependency.
+struct DependencyData {
+  ompt_tsan_clockid in;
+  ompt_tsan_clockid out;
+  ompt_tsan_clockid inoutset;
+  void *GetInPtr() { return &in; }
+  void *GetOutPtr() { return &out; }
+  void *GetInoutsetPtr() { return &inoutset; }
+};
+
+struct TaskDependency {
+  void *inPtr;
+  void *outPtr;
+  void *inoutsetPtr;
+  ompt_dependence_type_t type;
+  TaskDependency(DependencyData &depData, ompt_dependence_type_t type)
+      : inPtr(depData.GetInPtr()), outPtr(depData.GetOutPtr()),
+        inoutsetPtr(depData.GetInoutsetPtr()), type(type) {}
+  void AnnotateBegin() {
+    if (type == ompt_dependence_type_out ||
+        type == ompt_dependence_type_inout ||
+        type == ompt_dependence_type_mutexinoutset) {
+      TsanHappensAfter(inPtr);
+      TsanHappensAfter(outPtr);
+      TsanHappensAfter(inoutsetPtr);
+    } else if (type == ompt_dependence_type_in) {
+      TsanHappensAfter(outPtr);
+      TsanHappensAfter(inoutsetPtr);
+    } else if (type == ompt_dependence_type_inoutset) {
+      TsanHappensAfter(inPtr);
+      TsanHappensAfter(outPtr);
+    }
+  }
+  void AnnotateEnd() {
+    if (type == ompt_dependence_type_out ||
+        type == ompt_dependence_type_inout ||
+        type == ompt_dependence_type_mutexinoutset) {
+      TsanHappensBefore(outPtr);
+    } else if (type == ompt_dependence_type_in) {
+      TsanHappensBefore(inPtr);
+    } else if (type == ompt_dependence_type_inoutset) {
+      TsanHappensBefore(inoutsetPtr);
+    }
+  }
+};
+
 struct ParallelData;
 typedef DataPool<ParallelData> ParallelDataPool;
 __thread ParallelDataPool *pdp;
@@ -622,10 +674,17 @@ struct TaskData {
   Taskgroup *TaskGroup{nullptr};
 
   /// Dependency information for this task.
-  ompt_dependence_t *Dependencies{nullptr};
+  TaskDependency *Dependencies{nullptr};
 
   /// Number of dependency entries.
   unsigned DependencyCount{0};
+  
+  // The dependency-map stores DependencyData objects representing
+  // the dependency variables used on the sibling tasks created from
+  // this task
+  // We expect a rare need for the dependency-map, so alloc on demand
+  std::unordered_map<void*, DependencyData>* DependencyMap{nullptr};
+
 
 #ifdef DEBUG
   int freed{0};
@@ -645,7 +704,7 @@ struct TaskData {
   }
 
   TaskData(ParallelData *Team = nullptr)
-      : ImplicitTask(this), Team(Team), execution(1) {
+      : execution(1), ImplicitTask(this), Team(Team) {
     if (archer_flags->tasking)
       fiber = TsanGetCurrentFiber();
   }
@@ -692,14 +751,6 @@ void __pool_destroy_fiber(void *fiber) {
 void __pool_switch_to_fiber(void *fiber, unsigned flags) {
   Fiber = reinterpret_cast<FiberData *>(fiber);
   Fiber->SwitchToFiber(flags);
-}
-
-static inline void *ToInAddr(void *OutAddr) {
-  // FIXME: This will give false negatives when a second variable lays directly
-  //        behind a variable that only has a width of 1 byte.
-  //        Another approach would be to "negate" the address or to flip the
-  //        first bit...
-  return reinterpret_cast<char *>(OutAddr) + 1;
 }
 
 /// Store a mutex for each wait_id to resolve race condition with callbacks.
@@ -978,27 +1029,13 @@ static void __ompt_tsan_release_task(TaskData *task) {
 
 static void __ompt_tsan_release_dependencies(TaskData *task) {
   for (unsigned i = 0; i < task->DependencyCount; i++) {
-    ompt_dependence_t *Dependency = &task->Dependencies[i];
-
-    // in dependencies block following inout and out dependencies!
-    TsanHappensBefore(ToInAddr(Dependency->variable.ptr));
-    if (Dependency->dependence_type == ompt_dependence_type_out ||
-        Dependency->dependence_type == ompt_dependence_type_inout) {
-      TsanHappensBefore(Dependency->variable.ptr);
-    }
+    task->Dependencies[i].AnnotateEnd();
   }
 }
 
 static void __ompt_tsan_acquire_dependencies(TaskData *task) {
   for (unsigned i = 0; i < task->DependencyCount; i++) {
-    ompt_dependence_t *Dependency = &task->Dependencies[i];
-
-    TsanHappensAfter(Dependency->variable.ptr);
-    // in and inout dependencies are also blocked by prior in dependencies!
-    if (Dependency->dependence_type == ompt_dependence_type_out ||
-        Dependency->dependence_type == ompt_dependence_type_inout) {
-      TsanHappensAfter(ToInAddr(Dependency->variable.ptr));
-    }
+    task->Dependencies[i].AnnotateBegin();
   }
 }
 
@@ -1103,7 +1140,7 @@ static void ompt_tsan_task_schedule(ompt_data_t *first_task_data,
       prior_task_status == ompt_task_yield ||
       prior_task_status == ompt_task_detach) {
     // Task may be resumed at a later point in time.
-    TsanHappensBeforeReset(FromTask->GetTaskPtr());
+    TsanHappensBefore(FromTask->GetTaskPtr());
     ToTask->ImplicitTask = FromTask->ImplicitTask;
     assert(ToTask->ImplicitTask != NULL &&
            "A task belongs to a team and has an implicit task on the stack");
@@ -1124,7 +1161,7 @@ static void ompt_tsan_task_schedule(ompt_data_t *first_task_data,
     __ompt_tsan_acquire_dependencies(ToTask);
   } else {
     // 2. Task will resume after it has been switched away.
-    TsanHappensAfterReset(ToTask->GetTaskPtr());
+    TsanHappensAfter(ToTask->GetTaskPtr());
   }
 }
 
@@ -1133,9 +1170,13 @@ static void ompt_tsan_dependences(ompt_data_t *task_data,
   if (ndeps > 0) {
     // Copy the data to use it in task_switch and task_end.
     TaskData *Data = ToTaskData(task_data);
-    Data->Dependencies = new ompt_dependence_t[ndeps];
-    std::memcpy(Data->Dependencies, deps, sizeof(ompt_dependence_t) * ndeps);
+    if (!Data->Parent->DependencyMap)
+      Data->Parent->DependencyMap = new std::unordered_map<void*, DependencyData>;
+    Data->Dependencies = (TaskDependency*) malloc (sizeof(TaskDependency) * ndeps);
     Data->DependencyCount = ndeps;
+    for(int i=0; i<ndeps; i++) {
+      new((void*)(Data->Dependencies+i)) TaskDependency(Data->Parent->DependencyMap->operator[](deps[i].variable.ptr), deps[i].dependence_type);
+    }
 
     // This callback is executed before this task is first started.
     TsanHappensBefore(Data->GetTaskPtr());
