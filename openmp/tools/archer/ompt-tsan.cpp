@@ -63,6 +63,7 @@ public:
   int use_tlc_fibers;
   int use_fibers;
   int use_fiberpool;
+  std::atomic<int> untieds{0};
 
   ArcherFlags(const char *env)
       :
@@ -651,7 +652,7 @@ struct TaskData {
   bool InBarrier;
 
   /// Whether this task is an included task.
-  bool Included;
+  int TaskType{0};
 
   /// Index of which barrier to use next.
   char BarrierIndex;
@@ -686,8 +687,8 @@ struct TaskData {
 
   void *fiber;
 
-  TaskData(TaskData *Parent)
-      : InBarrier(false), Included(false), BarrierIndex(0), RefCount(1),
+  TaskData(TaskData *Parent, int taskType)
+      : InBarrier(false), TaskType(taskType), BarrierIndex(0), RefCount(1),
         Parent(Parent), ImplicitTask(nullptr), Team(Parent->Team),
         TaskGroup(nullptr), DependencyCount(0), execution(0), freed(0),
         fiber(nullptr) {
@@ -700,8 +701,8 @@ struct TaskData {
     }
   }
 
-  TaskData(ParallelData *Team = nullptr)
-      : InBarrier(false), Included(false), BarrierIndex(0), RefCount(1),
+  TaskData(ParallelData *Team, int taskType)
+      : InBarrier(false), TaskType(taskType), BarrierIndex(0), RefCount(1),
         Parent(nullptr), ImplicitTask(this), Team(Team), TaskGroup(nullptr),
         DependencyCount(0), execution(1), freed(0), fiber(nullptr) {
         fiber = TsanGetCurrentFiber();
@@ -718,6 +719,17 @@ struct TaskData {
   void Activate() {
       TsanSwitchToFiber(fiber, 1);
   }
+  
+  bool isIncluded() { return TaskType & ompt_task_undeferred; }
+  bool isUntied() { return TaskType & ompt_task_untied; }
+  bool isFinal() { return TaskType & ompt_task_final; }
+  bool isMergable() { return TaskType & ompt_task_mergeable; }
+  bool isMerged() { return TaskType & ompt_task_merged; }
+
+  bool isExplicit() { return TaskType & ompt_task_explicit; }
+  bool isImplicit() { return TaskType & ompt_task_implicit; }
+  bool isInitial() { return TaskType & ompt_task_initial; }
+  bool isTarget() { return TaskType & ompt_task_target; }
 
   void *GetTaskPtr() { return &Task; }
 
@@ -900,7 +912,7 @@ static void ompt_tsan_implicit_task(ompt_scope_endpoint_t endpoint,
     if (type & ompt_task_initial) {
       parallel_data->ptr = new ParallelData(nullptr);
     }
-    task_data->ptr = new TaskData(ToParallelData(parallel_data));
+    task_data->ptr = new TaskData(ToParallelData(parallel_data), type);
     TsanHappensAfter(ToParallelData(parallel_data)->GetParallelPtr());
     TsanFuncEntry(ToParallelData(parallel_data)->codePtr);
     break;
@@ -1059,22 +1071,22 @@ static void ompt_tsan_task_create(
     ParallelData *PData = new ParallelData(nullptr);
     parallel_data->ptr = PData;
 
-    Data = new TaskData(PData);
+    Data = new TaskData(PData, type);
     new_task_data->ptr = Data;
-  } else if (type & ompt_task_undeferred) {
-    Data = new TaskData(ToTaskData(parent_task_data));
-    new_task_data->ptr = Data;
-    Data->Included = true;
   } else if (type & ompt_task_explicit || type & ompt_task_target) {
-    Data = new TaskData(ToTaskData(parent_task_data));
+    Data = new TaskData(ToTaskData(parent_task_data), type);
     new_task_data->ptr = Data;
 
-    // Use the newly created address. We cannot use a single address from the
-    // parent because that would declare wrong relationships with other
-    // sibling tasks that may be created before this task is started!
-    TsanInitTLC(Data->GetTaskPtr());
-    ToTaskData(parent_task_data)->execution++;
+    if (!Data->isIncluded()) {
+      // Use the newly created address. We cannot use a single address from the
+      // parent because that would declare wrong relationships with other
+      // sibling tasks that may be created before this task is started!
+      TsanInitTLC(Data->GetTaskPtr());
+      ToTaskData(parent_task_data)->execution++;
+    }
   }
+  if (! archer_flags->untieds++ && (archer_flags->use_fiberpool || archer_flags->use_fibers) && Data->isUntied())
+    fprintf(stderr, "Archer Warning: fiber based analysis not yet supported for untied tasks\n");
 }
 
 static void __ompt_tsan_release_task(TaskData *task) {
@@ -1167,7 +1179,7 @@ static void ompt_tsan_task_schedule(ompt_data_t *first_task_data,
       prior_task_status == ompt_task_late_fulfill) {
     // Included tasks are executed sequentially, no need to track
     // synchronization
-    if (!FromTask->Included) {
+    if (!FromTask->isIncluded()) {
       // Task will finish before a barrier in the surrounding parallel region
       // ...
       ParallelData *PData = FromTask->Team;
@@ -1186,13 +1198,14 @@ static void ompt_tsan_task_schedule(ompt_data_t *first_task_data,
 
     // release dependencies
     __ompt_tsan_release_dependencies(FromTask);
-    if (prior_task_status == ompt_task_complete && !FromTask->Included)
+    if (prior_task_status == ompt_task_complete && !FromTask->isIncluded() && !FromTask->isUntied())
       ToTaskData(second_task_data)->Activate(); // must switch to next task before deleting the previous
     // free the previously running task
     __ompt_tsan_release_task(FromTask);
   } else {
-    if (!(ToTaskData(second_task_data)->Included && ToTaskData(second_task_data)->execution == 0))
-      ToTaskData(second_task_data)->Activate(); // must switch to next task before deleting the previous
+    TaskData *ToTask = ToTaskData(second_task_data);
+    if (!(ToTask->isIncluded() && ToTask->execution == 0) && !ToTask->isUntied() && !FromTask->isUntied())
+      ToTask->Activate(); // must switch to next task before deleting the previous
   }
 
   // For late fulfill of detached task, there is no task to schedule to
