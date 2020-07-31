@@ -232,10 +232,11 @@ unsigned long __attribute__((weak)) __sanitizer_get_heap_size() { return 0; }
 #endif
 }
 
-void *__pool_get_current_fiber();
-void *__pool_create_fiber(unsigned flags);
-void __pool_destroy_fiber(void *fiber);
-void __pool_switch_to_fiber(void *fiber, unsigned flags);
+struct FiberData;
+FiberData *__pool_get_current_fiber();
+FiberData *__pool_create_fiber(unsigned flags);
+void __pool_destroy_fiber(FiberData *fiber);
+void __pool_switch_to_fiber(FiberData *fiber, unsigned flags);
 
 #define TsanGetCurrentFiber() __pool_get_current_fiber()
 #define TsanCreateFiber(flag) __pool_create_fiber(flag)
@@ -469,7 +470,6 @@ template <typename T, int N> static void retData(void *data) {
   ((DataPool<T, N> **)data)[-1]->returnData((T *)data);
 }
 
-struct FiberData;
 static __thread PDataPool<FiberData, 4> *fdp{nullptr};
 
 template <> void retData<FiberData, 4>(void *data) {
@@ -479,6 +479,7 @@ template <> void retData<FiberData, 4>(void *data) {
   else
     pool->returnData((FiberData *)data);
 }
+__thread int threadNum{0};
 
 /// Data structure to store additional information for parallel regions.
 struct FiberData {
@@ -495,9 +496,11 @@ struct FiberData {
   //  void* GetCurrentFiber(){return __tsan_get_current_fiber();}
 
   void SwitchToFiber(int flags) {
-    if (!fiber)
+    if (!fiber) {
       fiber = __tsan_create_fiber(0);
+    }
     __tsan_switch_to_fiber(fiber, flags);
+    assert(Fiber == this);
     currentFiber = this;
   }
   static FiberData *getCurrentFiber() {
@@ -508,12 +511,17 @@ struct FiberData {
   }
 
   FiberData(void *newFiber) {
-    if (fiber)
+    if (fiber) {
       __tsan_destroy_fiber(fiber);
+    }
     isThreadFiber = true;
     fiber = newFiber;
   }
-  FiberData() {}
+  FiberData() {
+    if (!fiber) {
+      fiber = __tsan_create_fiber(0);
+    }
+  }
   ~FiberData() {}
   // overload new/delete to use DataPool for memory management.
   void *operator new(size_t size) { return fdp->getData(); }
@@ -690,7 +698,7 @@ struct TaskData {
   int freed{0};
 #endif
 
-  void *fiber;
+  FiberData *fiber;
 
   TaskData(TaskData *Parent) : Parent(Parent), Team(Parent->Team) {
     if (Parent != nullptr) {
@@ -736,20 +744,21 @@ static inline TaskData *ToTaskData(ompt_data_t *task_data) {
 
 __thread FiberData *Fiber{nullptr};
 
-void *__pool_get_current_fiber() {
-  if (!Fiber)
+FiberData *__pool_get_current_fiber() {
+  if (!Fiber) {
     Fiber = FiberData::getCurrentFiber();
+  }
   return Fiber;
 }
-void *__pool_create_fiber(unsigned flags) {
+FiberData *__pool_create_fiber(unsigned flags) {
   FiberData *ret = new FiberData();
   return ret;
 }
-void __pool_destroy_fiber(void *fiber) {
-  delete reinterpret_cast<FiberData *>(fiber);
+void __pool_destroy_fiber(FiberData *fiber) {
+  delete fiber;
 }
-void __pool_switch_to_fiber(void *fiber, unsigned flags) {
-  Fiber = reinterpret_cast<FiberData *>(fiber);
+void __pool_switch_to_fiber(FiberData *fiber, unsigned flags) {
+  Fiber = fiber;
   Fiber->SwitchToFiber(flags);
 }
 
@@ -768,8 +777,11 @@ static void ompt_tsan_thread_begin(ompt_thread_t thread_type,
   if (archer_flags->tasking) {
     fdp = new PDataPool<FiberData, 4>;
     TsanNewMemory(fdp, sizeof(fdp));
+    if (!Fiber) {
+      Fiber = TsanGetCurrentFiber();
+    }
   }
-  thread_data->value = my_next_id();
+  threadNum = thread_data->value = my_next_id();
 }
 
 static void ompt_tsan_thread_end(ompt_data_t *thread_data) {
