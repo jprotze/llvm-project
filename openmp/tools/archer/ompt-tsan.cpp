@@ -369,7 +369,7 @@ static ompt_get_thread_data_t ompt_get_thread_data;
 typedef int (*ompt_get_task_memory_t)(void **addr, size_t *size, int blocknum);
 static ompt_get_task_memory_t ompt_get_task_memory;
 
-typedef uint64_t ompt_tsan_clockid;
+typedef char ompt_tsan_clockid;
 
 static uint64_t my_next_id() {
   static uint64_t ID = 0;
@@ -567,7 +567,11 @@ struct FiberData {
     isThreadFiber = true;
     fiber = newFiber;
   }
-  FiberData() {}
+  FiberData() {
+    if (!fiber) {
+      fiber = __tsan_create_fiber(0);
+    }
+  }
   ~FiberData() {}
   // overload new/delete to use DataPool for memory management.
   void *operator new(size_t size) { return fdp->getData(); }
@@ -846,6 +850,7 @@ static void ompt_tsan_thread_begin(ompt_thread_t thread_type,
   if (archer_flags->use_fiberpool) {
     fdp = new PDataPool<FiberData, 4>;
     TsanNewMemory(fdp, sizeof(fdp));
+    TsanGetCurrentFiber();
   }
   thread_data->value = my_next_id();
 }
@@ -918,8 +923,10 @@ static void ompt_tsan_implicit_task(ompt_scope_endpoint_t endpoint,
     break;
   case ompt_scope_end:
     TaskData *Data = ToTaskData(task_data);
+#ifdef DEBUG
     assert(Data->freed == 0 && "Implicit task end should only be called once!");
     Data->freed = 1;
+#endif
     assert(Data->RefCount == 1 &&
            "All tasks should have finished at the implicit barrier!");
     delete Data;
@@ -1200,6 +1207,13 @@ static void ompt_tsan_task_schedule(ompt_data_t *first_task_data,
     __ompt_tsan_release_dependencies(FromTask);
     if (prior_task_status == ompt_task_complete && !FromTask->isIncluded() && !FromTask->isUntied())
       ToTaskData(second_task_data)->Activate(); // must switch to next task before deleting the previous
+    if (ompt_get_task_memory) {
+      void *addr;
+      size_t size;
+      if (ompt_get_task_memory(&addr, &size, 0) && size>0) {
+        TsanNewMemory(((void**)addr-1), size+8);
+      }
+    }
     // free the previously running task
     __ompt_tsan_release_task(FromTask);
   } else {
@@ -1237,9 +1251,9 @@ static void ompt_tsan_task_schedule(ompt_data_t *first_task_data,
     if (ompt_get_task_memory) {
       void *addr;
       size_t size;
-      if (ompt_get_task_memory(&addr, &size, 0)) {
+      if (ompt_get_task_memory(&addr, &size, 0) && size>0) {
 //        if (!archer_flags->use_tlc_fibers) {
-          TsanNewMemory(addr, size);
+          TsanNewMemory(((void**)addr-1), size+8);
 //        }
         DTLCPrintf("TsanNewMemory(%p, %li)\n", addr, size);
       }
