@@ -259,12 +259,12 @@ void __pool_switch_to_fiber(FiberData *fiber, unsigned flags);
   } while (0)
 
 // This marker defines the initialization of TLC execution.
-#define TsanHappensBeforeReset(cv) AnnotateInitTLC(__FILE__, __LINE__, cv)
-//#define TsanHappensBeforeReset(cv) AnnotateHappensBefore(__FILE__, __LINE__, cv)
+//#define TsanHappensBeforeReset(cv) AnnotateInitTLC(__FILE__, __LINE__, cv)
+#define TsanHappensBeforeReset(cv) AnnotateHappensBefore(__FILE__, __LINE__, cv)
 
 // This marker defines the start of TLC execution.
-#define TsanHappensAfterReset(cv) AnnotateStartTLC(__FILE__, __LINE__, cv)
-//#define TsanHappensAfterReset(cv) AnnotateHappensAfter(__FILE__, __LINE__, cv)
+//#define TsanHappensAfterReset(cv) AnnotateStartTLC(__FILE__, __LINE__, cv)
+#define TsanHappensAfterReset(cv) AnnotateHappensAfter(__FILE__, __LINE__, cv)
 
 // Ignore any races on writes between here and the next TsanIgnoreWritesEnd.
 #define TsanIgnoreWritesBegin()                                                \
