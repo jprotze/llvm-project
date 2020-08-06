@@ -1142,7 +1142,6 @@ static void ompt_tsan_task_schedule(ompt_data_t *first_task_data,
       void *addr;
       size_t size;
       if (ompt_get_task_memory(&addr, &size, 0)) {
-//        printf("TsanNewMemory(%p, %li)\n", ((void**)addr), size);
         TsanNewMemory(((void**)addr), size+8);
       }
     }
@@ -1184,7 +1183,6 @@ static void ompt_tsan_task_schedule(ompt_data_t *first_task_data,
       void *addr;
       size_t size;
       if (ompt_get_task_memory(&addr, &size, 0)) {
-        printf("TsanNewMemory(%p, %li)\n", ((void**)addr), size);
         TsanNewMemory(((void**)addr), size+8);
       }
     }
