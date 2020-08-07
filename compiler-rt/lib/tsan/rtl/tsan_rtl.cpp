@@ -718,13 +718,16 @@ void MemoryAccessImpl1_template(ThreadState *thr, uptr addr,
     return;
 
   // we only store read access if happened-before or sometime on same thread
-  old = LoadShadow(shadow_mem + (cur.epoch() % kShadowCnt));
   if (LIKELY(!kAccessIsWrite))
+    return;
+/*  old = LoadShadow(shadow_mem + (cur.epoch() % kShadowCnt));
+  if (LIKELY(!kAccessIsWrite)) {
     if (LIKELY(Shadow::TidsAreEqual(old, cur))) {
       if (LIKELY(cur.epoch() % 127 != 0))
         return;
     } else if(LIKELY(!HappensBefore(cur, thr)))
       return;
+  }*/
   // choose a random candidate slot and replace it
   StoreShadow(shadow_mem + (cur.epoch() % kShadowCnt), store_word);
   StatInc(thr, StatShadowReplace);
