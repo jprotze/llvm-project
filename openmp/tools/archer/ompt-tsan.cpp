@@ -457,6 +457,8 @@ template <typename T, int N> struct PDataPool : public DataPool<T, N> {
   ~PDataPool() {
     for (auto i : this->DataPointer)
       i->fini();
+    for (auto i : this->RemoteDataPointer)
+      i->fini();
     // we assume all memory is returned when the thread finished / destructor is
     // called
     for (auto i : this->memory)
