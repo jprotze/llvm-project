@@ -18,7 +18,11 @@ namespace __tsan {
 
 void StatAggregate(u64 *dst, u64 *src) {
   for (int i = 0; i < StatCnt; i++)
-    dst[i] += src[i];
+    if (i != StatThreadMaxAlive)
+      dst[i] += src[i];
+    // max(StatThreadMaxAlive)
+    else if (dst[i] < src[i])
+      dst[i] = src[i];
 }
 
 void StatOutput(u64 *stat) {
