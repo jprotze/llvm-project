@@ -428,6 +428,7 @@ int __ompt_get_task_info_internal(int ancestor_level, int *type,
 }
 
 int __ompt_get_task_memory_internal(void **addr, size_t *size, int blocknum) {
+  *size=0;
   if (blocknum != 0)
     return 0; // support only a single block
 
@@ -456,7 +457,7 @@ int __ompt_get_task_memory_internal(void **addr, size_t *size, int blocknum) {
 
   *addr = ret_addr;
   *size = ret_size;
-  return 1;
+  return 0;
 }
 
 //----------------------------------------------------------

@@ -815,12 +815,14 @@ static void ompt_tsan_thread_end(ompt_data_t *thread_data) {
                 << std::endl;
     outputMutex.unlock();
   }
+  TsanIgnoreWritesBegin();
   delete pdp;
   delete tgp;
   delete tdp;
   if (fdp) {
     delete fdp;
   }
+  TsanIgnoreWritesEnd();
 }
 
 /// OMPT event callbacks for handling parallel regions.
@@ -1140,11 +1142,14 @@ static void ompt_tsan_task_schedule(ompt_data_t *first_task_data,
     if (prior_task_status == ompt_task_complete && !FromTask->isIncluded() && !FromTask->isUntied())
       ToTaskData(second_task_data)
           ->Activate(); // must switch to next task before deleting the previous
-    if (ompt_get_task_memory) {
+    if (archer_flags->tasking && ompt_get_task_memory) {
       void *addr;
       size_t size;
-      if (ompt_get_task_memory(&addr, &size, 0)) {
-        TsanNewMemory(((void**)addr), size+8);
+      int ret_task_memory = 1, block=0;
+      while (ret_task_memory) {
+        ret_task_memory = ompt_get_task_memory(&addr, &size, block);
+        if (size>0)
+          TsanNewMemory(((void**)addr), size+8);
       }
     }
     // free the previously running task
@@ -1181,12 +1186,18 @@ static void ompt_tsan_task_schedule(ompt_data_t *first_task_data,
 
   // Handle dependencies on first execution of the task
   if (ToTask->execution == 0) {
-    if (ompt_get_task_memory) {
-      void *addr;
-      size_t size;
-      if (ompt_get_task_memory(&addr, &size, 0)) {
-        TsanNewMemory(((void**)addr), size+8);
+    if (archer_flags->tasking) {
+      if (ompt_get_task_memory) {
+        void *addr;
+        size_t size;
+        int ret_task_memory = 1, block=0;
+        while (ret_task_memory) {
+          ret_task_memory = ompt_get_task_memory(&addr, &size, block);
+          if (size>0)
+            TsanNewMemory(((void**)addr), size+8);
+        }
       }
+      TsanNewMemory((char*)__builtin_frame_address(0)-1024, 1024);
     }
     ToTask->execution++;
     // 1. Task will begin execution after it has been created.
