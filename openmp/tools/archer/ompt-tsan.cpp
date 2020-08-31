@@ -63,6 +63,7 @@ public:
   int use_tlc_fibers;
   int use_fibers;
   int use_fiberpool;
+  int tasking;
   std::atomic<int> untieds{0};
 
   ArcherFlags(const char *env)
@@ -71,7 +72,7 @@ public:
         flush_shadow(0),
 #endif
         print_max_rss(0), verbose(0), enabled(1), use_tlc(0), use_tlc_fibers(0),
-        use_fibers(0), use_fiberpool(0) {
+        use_fibers(0), use_fiberpool(0), tasking(0) {
     if (env) {
       std::vector<std::string> tokens;
       std::string token;
@@ -104,6 +105,8 @@ public:
                   << std::endl;
       }
     }
+    if (use_fibers || use_fiberpool || use_tlc || use_tlc_fibers)
+      tasking=1;
   }
 };
 
@@ -868,6 +871,7 @@ static void ompt_tsan_thread_end(ompt_data_t *thread_data) {
       std::cout << thread_data->value << "fdp: " << fdp->getLocal() << " remote " << fdp->getRemote() << " total " << fdp->getTotal() << " missing " << fdp->getMissing() << std::endl;
     outputMutex.unlock();
   }
+  TsanIgnoreWritesBegin();
   delete pdp;
   delete tgp;
   delete tdp;
@@ -877,6 +881,7 @@ static void ompt_tsan_thread_end(ompt_data_t *thread_data) {
   if (fdp) {
     delete fdp;
   }
+  TsanIgnoreWritesEnd();
 }
 
 /// OMPT event callbacks for handling parallel regions.
@@ -1209,11 +1214,14 @@ static void ompt_tsan_task_schedule(ompt_data_t *first_task_data,
     __ompt_tsan_release_dependencies(FromTask);
     if (prior_task_status == ompt_task_complete && !FromTask->isIncluded() && !FromTask->isUntied())
       ToTaskData(second_task_data)->Activate(); // must switch to next task before deleting the previous
-    if (ompt_get_task_memory) {
+    if (archer_flags->tasking && ompt_get_task_memory) {
       void *addr;
       size_t size;
-      if (ompt_get_task_memory(&addr, &size, 0) && size>0) {
-        TsanNewMemory(((void**)addr-1), size+8);
+      int ret_task_memory = 1, block=0;
+      while (ret_task_memory) {
+        ret_task_memory = ompt_get_task_memory(&addr, &size, block);
+        if (size>0)
+          TsanNewMemory(((void**)addr), size+8);
       }
     }
     // free the previously running task
@@ -1250,15 +1258,19 @@ static void ompt_tsan_task_schedule(ompt_data_t *first_task_data,
 
   // Handle dependencies on first execution of the task
   if (ToTask->execution == 0) {
-    if (ompt_get_task_memory) {
-      void *addr;
-      size_t size;
-      if (ompt_get_task_memory(&addr, &size, 0) && size>0) {
-//        if (!archer_flags->use_tlc_fibers) {
-          TsanNewMemory(((void**)addr-1), size+8);
-//        }
-        DTLCPrintf("TsanNewMemory(%p, %li)\n", addr, size);
+    if (archer_flags->tasking) {
+      if (ompt_get_task_memory) {
+        void *addr;
+        size_t size;
+        int ret_task_memory = 1, block=0;
+        while (ret_task_memory) {
+          ret_task_memory = ompt_get_task_memory(&addr, &size, block);
+          if (size>0)
+            TsanNewMemory(((void**)addr), size+8);
+            DTLCPrintf("TsanNewMemory(%p, %li)\n", addr, size);
+        }
       }
+      TsanNewMemory((char*)__builtin_frame_address(0)-1024, 1024);
     }
     ToTask->execution++;
     if (!archer_flags->use_tlc_fibers) {
