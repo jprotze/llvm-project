@@ -489,27 +489,12 @@ static bool __kmp_check_deps(kmp_int32 gtid, kmp_depnode_t *node,
   return npredecessors > 0 ? true : false;
 }
 
-/*!
-@ingroup TASKING
-@param loc_ref location of the original task directive
-@param gtid Global Thread ID of encountering thread
-@param new_task task thunk allocated by __kmp_omp_task_alloc() for the ''new
-task''
-@param ndeps Number of depend items with possible aliasing
-@param dep_list List of depend items with possible aliasing
-@param ndeps_noalias Number of depend items with no aliasing
-@param noalias_dep_list List of depend items with no aliasing
-
-@return Returns either TASK_CURRENT_NOT_QUEUED if the current task was not
-suspended and queued, or TASK_CURRENT_QUEUED if it was suspended and queued
-
-Schedule a non-thread-switchable task with dependences for execution
-*/
-kmp_int32 __kmpc_omp_task_with_deps(ident_t *loc_ref, kmp_int32 gtid,
-                                    kmp_task_t *new_task, kmp_int32 ndeps,
-                                    kmp_depend_info_t *dep_list,
-                                    kmp_int32 ndeps_noalias,
-                                    kmp_depend_info_t *noalias_dep_list) {
+/// \see __kmpc_omp_task_with_deps
+kmp_int32 __kmp_aux_omp_task_with_deps(ident_t *loc_ref, kmp_int32 gtid,
+                                       kmp_task_t *new_task, kmp_int32 ndeps,
+                                       kmp_depend_info_t *dep_list,
+                                       kmp_int32 ndeps_noalias,
+                                       kmp_depend_info_t *noalias_dep_list) {
 
   kmp_taskdata_t *new_taskdata = KMP_TASK_TO_TASKDATA(new_task);
   KA_TRACE(10, ("__kmpc_omp_task_with_deps(enter): T#%d loc=%p task=%p\n", gtid,
@@ -637,6 +622,31 @@ kmp_int32 __kmpc_omp_task_with_deps(ident_t *loc_ref, kmp_int32 gtid,
   return ret;
 }
 
+/*!
+@ingroup TASKING
+@param loc_ref location of the original task directive
+@param gtid Global Thread ID of encountering thread
+@param new_task task thunk allocated by __kmp_omp_task_alloc() for the ''new
+task''
+@param ndeps Number of depend items with possible aliasing
+@param dep_list List of depend items with possible aliasing
+@param ndeps_noalias Number of depend items with no aliasing
+@param noalias_dep_list List of depend items with no aliasing
+
+@return Returns either TASK_CURRENT_NOT_QUEUED if the current task was not
+suspended and queued, or TASK_CURRENT_QUEUED if it was suspended and queued
+
+Schedule a non-thread-switchable task with dependences for execution
+*/
+kmp_int32 __kmpc_omp_task_with_deps(ident_t *loc_ref, kmp_int32 gtid,
+                                    kmp_task_t *new_task, kmp_int32 ndeps,
+                                    kmp_depend_info_t *dep_list,
+                                    kmp_int32 ndeps_noalias,
+                                    kmp_depend_info_t *noalias_dep_list) {
+  return __kmp_aux_omp_task_with_deps(loc_ref, gtid, new_task, ndeps, dep_list,
+                                      ndeps_noalias, noalias_dep_list);
+}
+
 #if OMPT_SUPPORT
 void __ompt_taskwait_dep_finish(kmp_taskdata_t *current_task,
                                 ompt_data_t *taskwait_task_data) {
@@ -654,20 +664,11 @@ void __ompt_taskwait_dep_finish(kmp_taskdata_t *current_task,
 }
 #endif /* OMPT_SUPPORT */
 
-/*!
-@ingroup TASKING
-@param loc_ref location of the original task directive
-@param gtid Global Thread ID of encountering thread
-@param ndeps Number of depend items with possible aliasing
-@param dep_list List of depend items with possible aliasing
-@param ndeps_noalias Number of depend items with no aliasing
-@param noalias_dep_list List of depend items with no aliasing
-
-Blocks the current task until all specifies dependencies have been fulfilled.
-*/
-void __kmpc_omp_wait_deps(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 ndeps,
-                          kmp_depend_info_t *dep_list, kmp_int32 ndeps_noalias,
-                          kmp_depend_info_t *noalias_dep_list) {
+/// \see __kmpc_omp_wait_deps
+void __kmp_aux_omp_wait_deps(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 ndeps,
+                             kmp_depend_info_t *dep_list,
+                             kmp_int32 ndeps_noalias,
+                             kmp_depend_info_t *noalias_dep_list) {
   KA_TRACE(10, ("__kmpc_omp_wait_deps(enter): T#%d loc=%p\n", gtid, loc_ref));
 
   if (ndeps == 0 && ndeps_noalias == 0) {
@@ -799,4 +800,22 @@ void __kmpc_omp_wait_deps(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 ndeps,
 #endif /* OMPT_SUPPORT */
   KA_TRACE(10, ("__kmpc_omp_wait_deps(exit): T#%d finished waiting : loc=%p\n",
                 gtid, loc_ref));
+}
+
+/*!
+@ingroup TASKING
+@param loc_ref location of the original task directive
+@param gtid Global Thread ID of encountering thread
+@param ndeps Number of depend items with possible aliasing
+@param dep_list List of depend items with possible aliasing
+@param ndeps_noalias Number of depend items with no aliasing
+@param noalias_dep_list List of depend items with no aliasing
+
+Blocks the current task until all specifies dependencies have been fulfilled.
+*/
+void __kmpc_omp_wait_deps(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 ndeps,
+                          kmp_depend_info_t *dep_list, kmp_int32 ndeps_noalias,
+                          kmp_depend_info_t *noalias_dep_list) {
+  return __kmp_aux_omp_wait_deps(loc_ref, gtid, ndeps, dep_list, ndeps_noalias,
+                                 noalias_dep_list);
 }

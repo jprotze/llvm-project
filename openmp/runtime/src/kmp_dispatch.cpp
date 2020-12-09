@@ -2635,6 +2635,47 @@ void __kmp_aux_dispatch_fini_chunk_8u(ident_t *loc, kmp_int32 gtid) {
   __kmp_dispatch_finish_chunk<kmp_uint64>(gtid, loc);
 }
 
+int __kmp_aux_dispatch_next_4(ident_t *loc, kmp_int32 gtid, kmp_int32 *p_last,
+                              kmp_int32 *p_lb, kmp_int32 *p_ub,
+                              kmp_int32 *p_st) {
+  return __kmp_dispatch_next<kmp_int32>(loc, gtid, p_last, p_lb, p_ub, p_st
+#if OMPT_SUPPORT && OMPT_OPTIONAL
+                                        ,
+                                        OMPT_LOAD_RETURN_ADDRESS(gtid)
+#endif
+  );
+}
+int __kmp_aux_dispatch_next_4u(ident_t *loc, kmp_int32 gtid, kmp_int32 *p_last,
+                               kmp_uint32 *p_lb, kmp_uint32 *p_ub,
+                               kmp_int32 *p_st) {
+  return __kmp_dispatch_next<kmp_uint32>(loc, gtid, p_last, p_lb, p_ub, p_st
+#if OMPT_SUPPORT && OMPT_OPTIONAL
+                                         ,
+                                         OMPT_LOAD_RETURN_ADDRESS(gtid)
+#endif
+  );
+}
+int __kmp_aux_dispatch_next_8(ident_t *loc, kmp_int32 gtid, kmp_int32 *p_last,
+                              kmp_int64 *p_lb, kmp_int64 *p_ub,
+                              kmp_int64 *p_st) {
+  return __kmp_dispatch_next<kmp_int64>(loc, gtid, p_last, p_lb, p_ub, p_st
+#if OMPT_SUPPORT && OMPT_OPTIONAL
+                                        ,
+                                        OMPT_LOAD_RETURN_ADDRESS(gtid)
+#endif
+  );
+}
+int __kmp_aux_dispatch_next_8u(ident_t *loc, kmp_int32 gtid, kmp_int32 *p_last,
+                               kmp_uint64 *p_lb, kmp_uint64 *p_ub,
+                               kmp_int64 *p_st) {
+  return __kmp_dispatch_next<kmp_uint64>(loc, gtid, p_last, p_lb, p_ub, p_st
+#if OMPT_SUPPORT && OMPT_OPTIONAL
+                                         ,
+                                         OMPT_LOAD_RETURN_ADDRESS(gtid)
+#endif
+  );
+}
+
 #endif /* KMP_GOMP_COMPAT */
 
 /* ------------------------------------------------------------------------ */

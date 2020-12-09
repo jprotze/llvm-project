@@ -473,14 +473,8 @@ void __kmpc_serialized_parallel(ident_t *loc, kmp_int32 global_tid) {
   __kmp_serialized_parallel(loc, global_tid);
 }
 
-/*!
-@ingroup PARALLEL
-@param loc  source location information
-@param global_tid  global thread number
-
-Leave a serialized parallel construct.
-*/
-void __kmpc_end_serialized_parallel(ident_t *loc, kmp_int32 global_tid) {
+/// \see __kmpc_end_serialized_parallel
+void __kmp_aux_end_serialized_parallel(ident_t *loc, kmp_int32 global_tid) {
   kmp_internal_control_t *top;
   kmp_info_t *this_thr;
   kmp_team_t *serial_team;
@@ -623,6 +617,17 @@ void __kmpc_end_serialized_parallel(ident_t *loc, kmp_int32 global_tid) {
 }
 
 /*!
+@ingroup PARALLEL
+@param loc  source location information
+@param global_tid  global thread number
+
+Leave a serialized parallel construct.
+*/
+void __kmpc_end_serialized_parallel(ident_t *loc, kmp_int32 global_tid) {
+  __kmp_aux_end_serialized_parallel(loc, global_tid);
+}
+
+/*!
 @ingroup SYNCHRONIZATION
 @param loc  source location information.
 
@@ -682,18 +687,10 @@ void __kmpc_flush(ident_t *loc) {
 #endif
 }
 
-/* -------------------------------------------------------------------------- */
-/*!
-@ingroup SYNCHRONIZATION
-@param loc source location information
-@param global_tid thread id.
-
-Execute a barrier.
-*/
-void __kmpc_barrier(ident_t *loc, kmp_int32 global_tid) {
+/// \see __kmpc_barrier
+void __kmp_aux_barrier(ident_t *loc, kmp_int32 global_tid) {
   KMP_COUNT_BLOCK(OMP_BARRIER);
   KC_TRACE(10, ("__kmpc_barrier: called T#%d\n", global_tid));
-  __kmp_assert_valid_gtid(global_tid);
 
   if (!TCR_4(__kmp_init_parallel))
     __kmp_parallel_initialize();
@@ -730,6 +727,19 @@ void __kmpc_barrier(ident_t *loc, kmp_int32 global_tid) {
     ompt_frame->enter_frame = ompt_data_none;
   }
 #endif
+}
+
+/* -------------------------------------------------------------------------- */
+/*!
+@ingroup SYNCHRONIZATION
+@param loc source location information
+@param global_tid thread id.
+
+Execute a barrier.
+*/
+void __kmpc_barrier(ident_t *loc, kmp_int32 global_tid) {
+  __kmp_assert_valid_gtid(global_tid);
+  __kmp_aux_barrier(loc, global_tid);
 }
 
 /* The BARRIER for a MASTER section is always explicit   */
@@ -820,14 +830,8 @@ void __kmpc_end_master(ident_t *loc, kmp_int32 global_tid) {
   }
 }
 
-/*!
-@ingroup WORK_SHARING
-@param loc  source location information.
-@param gtid  global thread number.
-
-Start execution of an <tt>ordered</tt> construct.
-*/
-void __kmpc_ordered(ident_t *loc, kmp_int32 gtid) {
+/// \see __kmpc_ordered
+void __kmp_aux_ordered(ident_t *loc, kmp_int32 gtid) {
   int cid = 0;
   kmp_info_t *th;
   KMP_DEBUG_ASSERT(__kmp_init_serial);
@@ -892,15 +896,19 @@ void __kmpc_ordered(ident_t *loc, kmp_int32 gtid) {
   __kmp_itt_ordered_start(gtid);
 #endif /* USE_ITT_BUILD */
 }
-
 /*!
 @ingroup WORK_SHARING
 @param loc  source location information.
 @param gtid  global thread number.
 
-End execution of an <tt>ordered</tt> construct.
+Start execution of an <tt>ordered</tt> construct.
 */
-void __kmpc_end_ordered(ident_t *loc, kmp_int32 gtid) {
+void __kmpc_ordered(ident_t *loc, kmp_int32 gtid) {
+  __kmp_aux_ordered(loc, gtid);
+}
+
+/// \see __kmpc_end_ordered
+void __kmp_aux_end_ordered(ident_t *loc, kmp_int32 gtid) {
   int cid = 0;
   kmp_info_t *th;
 
@@ -929,6 +937,16 @@ void __kmpc_end_ordered(ident_t *loc, kmp_int32 gtid) {
         OMPT_LOAD_RETURN_ADDRESS(gtid));
   }
 #endif
+}
+/*!
+@ingroup WORK_SHARING
+@param loc  source location information.
+@param gtid  global thread number.
+
+End execution of an <tt>ordered</tt> construct.
+*/
+void __kmpc_end_ordered(ident_t *loc, kmp_int32 gtid) {
+  __kmp_aux_end_ordered(loc, gtid);
 }
 
 #if KMP_USE_DYNAMIC_LOCK
@@ -1125,23 +1143,14 @@ static kmp_user_lock_p __kmp_get_critical_section_ptr(kmp_critical_name *crit,
 
 #endif // KMP_USE_DYNAMIC_LOCK
 
-/*!
-@ingroup WORK_SHARING
-@param loc  source location information.
-@param global_tid  global thread number.
-@param crit identity of the critical section. This could be a pointer to a lock
-associated with the critical section, or some other suitably unique value.
-
-Enter code protected by a `critical` construct.
-This function blocks until the executing thread can enter the critical section.
-*/
-void __kmpc_critical(ident_t *loc, kmp_int32 global_tid,
-                     kmp_critical_name *crit) {
+/// \see __kmpc_critical
+void __kmp_aux_critical(ident_t *loc, kmp_int32 global_tid,
+                        kmp_critical_name *crit) {
 #if KMP_USE_DYNAMIC_LOCK
 #if OMPT_SUPPORT && OMPT_OPTIONAL
   OMPT_STORE_RETURN_ADDRESS(global_tid);
 #endif // OMPT_SUPPORT
-  __kmpc_critical_with_hint(loc, global_tid, crit, omp_lock_hint_none);
+  __kmp_aux_critical_with_hint(loc, global_tid, crit, omp_lock_hint_none);
 #else
   KMP_COUNT_BLOCK(OMP_CRITICAL);
 #if OMPT_SUPPORT && OMPT_OPTIONAL
@@ -1227,6 +1236,21 @@ void __kmpc_critical(ident_t *loc, kmp_int32 global_tid,
   KMP_PUSH_PARTITIONED_TIMER(OMP_critical);
   KA_TRACE(15, ("__kmpc_critical: done T#%d\n", global_tid));
 #endif // KMP_USE_DYNAMIC_LOCK
+}
+
+/*!
+@ingroup WORK_SHARING
+@param loc  source location information.
+@param global_tid  global thread number.
+@param crit identity of the critical section. This could be a pointer to a lock
+associated with the critical section, or some other suitably unique value.
+
+Enter code protected by a `critical` construct.
+This function blocks until the executing thread can enter the critical section.
+*/
+void __kmpc_critical(ident_t *loc, kmp_int32 global_tid,
+                     kmp_critical_name *crit) {
+  __kmp_aux_critical(loc, global_tid, crit);
 }
 
 #if KMP_USE_DYNAMIC_LOCK
@@ -1347,21 +1371,9 @@ static kmp_mutex_impl_t __ompt_get_mutex_impl_type() {
 #endif // KMP_USE_DYNAMIC_LOCK
 #endif // OMPT_SUPPORT && OMPT_OPTIONAL
 
-/*!
-@ingroup WORK_SHARING
-@param loc  source location information.
-@param global_tid  global thread number.
-@param crit identity of the critical section. This could be a pointer to a lock
-associated with the critical section, or some other suitably unique value.
-@param hint the lock hint.
-
-Enter code protected by a `critical` construct with a hint. The hint value is
-used to suggest a lock implementation. This function blocks until the executing
-thread can enter the critical section unless the hint suggests use of
-speculative execution and the hardware supports it.
-*/
-void __kmpc_critical_with_hint(ident_t *loc, kmp_int32 global_tid,
-                               kmp_critical_name *crit, uint32_t hint) {
+/// \see __kmpc_critical_with_hint
+void __kmp_aux_critical_with_hint(ident_t *loc, kmp_int32 global_tid,
+                                  kmp_critical_name *crit, uint32_t hint) {
   KMP_COUNT_BLOCK(OMP_CRITICAL);
   kmp_user_lock_p lck;
 #if OMPT_SUPPORT && OMPT_OPTIONAL
@@ -1481,19 +1493,29 @@ void __kmpc_critical_with_hint(ident_t *loc, kmp_int32 global_tid,
   KA_TRACE(15, ("__kmpc_critical: done T#%d\n", global_tid));
 } // __kmpc_critical_with_hint
 
-#endif // KMP_USE_DYNAMIC_LOCK
-
 /*!
 @ingroup WORK_SHARING
 @param loc  source location information.
-@param global_tid  global thread number .
+@param global_tid  global thread number.
 @param crit identity of the critical section. This could be a pointer to a lock
 associated with the critical section, or some other suitably unique value.
+@param hint the lock hint.
 
-Leave a critical section, releasing any lock that was held during its execution.
+Enter code protected by a `critical` construct with a hint. The hint value is
+used to suggest a lock implementation. This function blocks until the executing
+thread can enter the critical section unless the hint suggests use of
+speculative execution and the hardware supports it.
 */
-void __kmpc_end_critical(ident_t *loc, kmp_int32 global_tid,
-                         kmp_critical_name *crit) {
+void __kmpc_critical_with_hint(ident_t *loc, kmp_int32 global_tid,
+                               kmp_critical_name *crit, uint32_t hint) {
+  __kmp_aux_critical_with_hint(loc, global_tid, crit, hint);
+}
+
+#endif // KMP_USE_DYNAMIC_LOCK
+
+/// \see __kmpc_end_critical
+void __kmp_aux_end_critical(ident_t *loc, kmp_int32 global_tid,
+                            kmp_critical_name *crit) {
   kmp_user_lock_p lck;
 
   KC_TRACE(10, ("__kmpc_end_critical: called T#%d\n", global_tid));
@@ -1577,6 +1599,20 @@ void __kmpc_end_critical(ident_t *loc, kmp_int32 global_tid,
 
   KMP_POP_PARTITIONED_TIMER();
   KA_TRACE(15, ("__kmpc_end_critical: done T#%d\n", global_tid));
+}
+
+/*!
+@ingroup WORK_SHARING
+@param loc  source location information.
+@param global_tid  global thread number .
+@param crit identity of the critical section. This could be a pointer to a lock
+associated with the critical section, or some other suitably unique value.
+
+Leave a critical section, releasing any lock that was held during its execution.
+*/
+void __kmpc_end_critical(ident_t *loc, kmp_int32 global_tid,
+                         kmp_critical_name *crit) {
+  __kmp_aux_end_critical(loc, global_tid, crit);
 }
 
 /*!
@@ -3853,19 +3889,9 @@ kmp_uint64 __kmpc_get_parent_taskid() {
 
 } // __kmpc_get_parent_taskid
 
-/*!
-@ingroup WORK_SHARING
-@param loc  source location information.
-@param gtid  global thread number.
-@param num_dims  number of associated doacross loops.
-@param dims  info on loops bounds.
-
-Initialize doacross loop information.
-Expect compiler send us inclusive bounds,
-e.g. for(i=2;i<9;i+=2) lo=2, up=8, st=2.
-*/
-void __kmpc_doacross_init(ident_t *loc, int gtid, int num_dims,
-                          const struct kmp_dim *dims) {
+/// \see __kmpc_doacross_init
+void __kmp_aux_doacross_init(ident_t *loc, int gtid, int num_dims,
+                             const struct kmp_dim *dims) {
   __kmp_assert_valid_gtid(gtid);
   int j, idx;
   kmp_int64 last, trace_count;
@@ -3985,7 +4011,24 @@ void __kmpc_doacross_init(ident_t *loc, int gtid, int num_dims,
   KA_TRACE(20, ("__kmpc_doacross_init() exit: T#%d\n", gtid));
 }
 
-void __kmpc_doacross_wait(ident_t *loc, int gtid, const kmp_int64 *vec) {
+/*!
+@ingroup WORK_SHARING
+@param loc  source location information.
+@param gtid  global thread number.
+@param num_dims  number of associated doacross loops.
+@param dims  info on loops bounds.
+
+Initialize doacross loop information.
+Expect compiler send us inclusive bounds,
+e.g. for(i=2;i<9;i+=2) lo=2, up=8, st=2.
+*/
+void __kmpc_doacross_init(ident_t *loc, int gtid, int num_dims,
+                          const struct kmp_dim *dims) {
+  __kmp_aux_doacross_init(loc, gtid, num_dims, dims);
+}
+
+/// \see __kmpc_doacross_wait
+void __kmp_aux_doacross_wait(ident_t *loc, int gtid, const kmp_int64 *vec) {
   __kmp_assert_valid_gtid(gtid);
   kmp_int32 shft, num_dims, i;
   kmp_uint32 flag;
@@ -4096,7 +4139,18 @@ void __kmpc_doacross_wait(ident_t *loc, int gtid, const kmp_int64 *vec) {
             gtid, (iter_number << 5) + shft));
 }
 
-void __kmpc_doacross_post(ident_t *loc, int gtid, const kmp_int64 *vec) {
+/*!
+@ingroup WORK_SHARING
+@param loc  source location information.
+@param gtid  global thread number.
+@param vec   vector of iteration variable values in sink clause.
+*/
+void __kmpc_doacross_wait(ident_t *loc, int gtid, const kmp_int64 *vec) {
+  __kmp_aux_doacross_wait(loc, gtid, vec);
+}
+
+/// \see __kmpc_doacross_post
+void __kmp_aux_doacross_post(ident_t *loc, int gtid, const kmp_int64 *vec) {
   __kmp_assert_valid_gtid(gtid);
   kmp_int32 shft, num_dims, i;
   kmp_uint32 flag;
@@ -4168,7 +4222,18 @@ void __kmpc_doacross_post(ident_t *loc, int gtid, const kmp_int64 *vec) {
                 (iter_number << 5) + shft));
 }
 
-void __kmpc_doacross_fini(ident_t *loc, int gtid) {
+/*!
+@ingroup WORK_SHARING
+@param loc  source location information.
+@param gtid  global thread number.
+@param vec   vector of iteration variable values in source clause.
+*/
+void __kmpc_doacross_post(ident_t *loc, int gtid, const kmp_int64 *vec) {
+  __kmp_aux_doacross_post(loc, gtid, vec);
+}
+
+/// \see __kmpc_doacross_fini
+void __kmp_aux_doacross_fini(ident_t *loc, int gtid) {
   __kmp_assert_valid_gtid(gtid);
   kmp_int32 num_done;
   kmp_info_t *th = __kmp_threads[gtid];
@@ -4202,24 +4267,32 @@ void __kmpc_doacross_fini(ident_t *loc, int gtid) {
   pr_buf->th_doacross_info = NULL;
   KA_TRACE(20, ("__kmpc_doacross_fini() exit: T#%d\n", gtid));
 }
+/*!
+@ingroup WORK_SHARING
+@param loc  source location information.
+@param gtid  global thread number.
+*/
+void __kmpc_doacross_fini(ident_t *loc, int gtid) {
+  __kmp_aux_doacross_fini(loc, gtid);
+}
 
 /* omp_alloc/omp_calloc/omp_free only defined for C/C++, not for Fortran */
 void *omp_alloc(size_t size, omp_allocator_handle_t allocator) {
-  return __kmpc_alloc(__kmp_entry_gtid(), size, allocator);
+  return __kmp_alloc(__kmp_entry_gtid(), size, allocator);
 }
 
 void *omp_calloc(size_t nmemb, size_t size, omp_allocator_handle_t allocator) {
-  return __kmpc_calloc(__kmp_entry_gtid(), nmemb, size, allocator);
+  return __kmp_calloc(__kmp_entry_gtid(), nmemb, size, allocator);
 }
 
 void *omp_realloc(void *ptr, size_t size, omp_allocator_handle_t allocator,
                   omp_allocator_handle_t free_allocator) {
-  return __kmpc_realloc(__kmp_entry_gtid(), ptr, size, allocator,
+  return __kmp_realloc(__kmp_entry_gtid(), ptr, size, allocator,
                         free_allocator);
 }
 
 void omp_free(void *ptr, omp_allocator_handle_t allocator) {
-  __kmpc_free(__kmp_entry_gtid(), ptr, allocator);
+  __kmp_alloc_free(__kmp_entry_gtid(), ptr, allocator);
 }
 
 int __kmpc_get_target_offload(void) {

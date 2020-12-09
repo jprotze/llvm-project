@@ -354,6 +354,23 @@ extern "C" {
 #define KMP_ATTRIBUTE_TARGET_RTM /* Nothing */
 #endif
 
+#if __cplusplus > 201402L && __has_cpp_attribute(deprecated)
+#define KMP_EXTERNAL_INTERFACE                                                 \
+  [[deprecated("Internal use of external __kmpc_ compiler interface is "       \
+               "deprecated, use __kmp_aux_ function instead.")]]
+#elif __cplusplus > 201402L && __has_cpp_attribute(clang::deprecated)
+#define KMP_EXTERNAL_INTERFACE                                                 \
+  [[deprecated("Internal use of external __kmpc_ compiler interface is "       \
+               "deprecated, use __kmp_aux_ function instead.")]]
+#elif __has_attribute(deprecated) || __GNUC__ >= 7
+#define KMP_EXTERNAL_INTERFACE                                                 \
+  __attribute__(                                                               \
+      (deprecated("Internal use of external __kmpc_ compiler interface is "    \
+                  "deprecated, use __kmp_aux_ function instead.")))
+#else
+#define KMP_EXTERNAL_INTERFACE
+#endif
+
 // Define attribute that indicates a function does not return
 #if __cplusplus >= 201103L
 #define KMP_NORETURN [[noreturn]]

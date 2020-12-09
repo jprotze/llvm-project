@@ -15,18 +15,9 @@
 #include "ompt-specific.h"
 #endif
 
-/*!
-@ingroup CANCELLATION
-@param loc_ref location of the original task directive
-@param gtid Global thread ID of encountering thread
-@param cncl_kind Cancellation kind (parallel, for, sections, taskgroup)
-
-@return returns true if the cancellation request has been activated and the
-execution thread needs to proceed to the end of the canceled region.
-
-Request cancellation of the binding OpenMP region.
-*/
-kmp_int32 __kmpc_cancel(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 cncl_kind) {
+/// \see __kmpc_cancel
+kmp_int32 __kmp_aux_cancel(ident_t *loc_ref, kmp_int32 gtid,
+                           kmp_int32 cncl_kind) {
   kmp_info_t *this_thr = __kmp_threads[gtid];
 
   KC_TRACE(10, ("__kmpc_cancel: T#%d request %d OMP_CANCELLATION=%d\n", gtid,
@@ -127,13 +118,18 @@ kmp_int32 __kmpc_cancel(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 cncl_kind) {
 @param gtid Global thread ID of encountering thread
 @param cncl_kind Cancellation kind (parallel, for, sections, taskgroup)
 
-@return returns true if a matching cancellation request has been flagged in the
-RTL and the encountering thread has to cancel..
+@return returns true if the cancellation request has been activated and the
+execution thread needs to proceed to the end of the canceled region.
 
-Cancellation point for the encountering thread.
+Request cancellation of the binding OpenMP region.
 */
-kmp_int32 __kmpc_cancellationpoint(ident_t *loc_ref, kmp_int32 gtid,
-                                   kmp_int32 cncl_kind) {
+kmp_int32 __kmpc_cancel(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 cncl_kind) {
+  return __kmp_aux_cancel(loc_ref, gtid, cncl_kind);
+}
+
+/// \see __kmpc_cancellationpoint
+kmp_int32 __kmp_aux_cancellationpoint(ident_t *loc_ref, kmp_int32 gtid,
+                                      kmp_int32 cncl_kind) {
   kmp_info_t *this_thr = __kmp_threads[gtid];
 
   KC_TRACE(10,
@@ -228,6 +224,21 @@ kmp_int32 __kmpc_cancellationpoint(ident_t *loc_ref, kmp_int32 gtid,
   return 0 /* false */;
 }
 
+/*!
+@ingroup CANCELLATION
+@param loc_ref location of the original task directive
+@param gtid Global thread ID of encountering thread
+@param cncl_kind Cancellation kind (parallel, for, sections, taskgroup)
+
+@return returns true if a matching cancellation request has been flagged in the
+RTL and the encountering thread has to cancel..
+
+Cancellation point for the encountering thread.
+*/
+kmp_int32 __kmpc_cancellationpoint(ident_t *loc_ref, kmp_int32 gtid,
+                                   kmp_int32 cncl_kind) {
+  return __kmp_aux_cancellationpoint(loc_ref, gtid, cncl_kind);
+}
 /*!
 @ingroup CANCELLATION
 @param loc_ref location of the original task directive

@@ -1512,7 +1512,7 @@ int __kmp_fork_call(ident_t *loc, int gtid,
       // Increment our nested depth levels, but not increase the serialization
       if (parent_team == master_th->th.th_serial_team) {
         // AC: we are in serialized parallel
-        __kmpc_serialized_parallel(loc, gtid);
+        __kmp_serialized_parallel(loc, gtid);
         KMP_DEBUG_ASSERT(parent_team->t.t_serialized > 1);
 
         if (call_context == fork_context_gnu) {
@@ -1742,7 +1742,7 @@ int __kmp_fork_call(ident_t *loc, int gtid,
       KA_TRACE(20,
                ("__kmp_fork_call: T#%d serializing parallel region\n", gtid));
 
-      __kmpc_serialized_parallel(loc, gtid);
+      __kmp_serialized_parallel(loc, gtid);
 
       if (call_context == fork_context_intel) {
         /* TODO this sucks, use the compiler itself to pass args! :) */
@@ -2349,7 +2349,7 @@ void __kmp_join_call(ident_t *loc, int gtid
         team->t.t_serialized++;
       }
     }
-    __kmpc_end_serialized_parallel(loc, gtid);
+    __kmp_aux_end_serialized_parallel(loc, gtid);
 
 #if OMPT_SUPPORT
     if (ompt_enabled.enabled) {

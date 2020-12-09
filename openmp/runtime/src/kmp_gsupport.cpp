@@ -105,7 +105,7 @@ void KMP_EXPAND_NAME(KMP_API_NAME_GOMP_BARRIER)(void) {
   }
   OMPT_STORE_RETURN_ADDRESS(gtid);
 #endif
-  __kmpc_barrier(&loc, gtid);
+  __kmp_aux_barrier(&loc, gtid);
 #if OMPT_SUPPORT && OMPT_OPTIONAL
   if (ompt_enabled.enabled) {
     ompt_frame->enter_frame = ompt_data_none;
@@ -131,7 +131,7 @@ void KMP_EXPAND_NAME(KMP_API_NAME_GOMP_CRITICAL_START)(void) {
 #if OMPT_SUPPORT && OMPT_OPTIONAL
   OMPT_STORE_RETURN_ADDRESS(gtid);
 #endif
-  __kmpc_critical(&loc, gtid, __kmp_unnamed_critical_addr);
+  __kmp_aux_critical(&loc, gtid, __kmp_unnamed_critical_addr);
 }
 
 void KMP_EXPAND_NAME(KMP_API_NAME_GOMP_CRITICAL_END)(void) {
@@ -141,21 +141,21 @@ void KMP_EXPAND_NAME(KMP_API_NAME_GOMP_CRITICAL_END)(void) {
 #if OMPT_SUPPORT && OMPT_OPTIONAL
   OMPT_STORE_RETURN_ADDRESS(gtid);
 #endif
-  __kmpc_end_critical(&loc, gtid, __kmp_unnamed_critical_addr);
+  __kmp_aux_end_critical(&loc, gtid, __kmp_unnamed_critical_addr);
 }
 
 void KMP_EXPAND_NAME(KMP_API_NAME_GOMP_CRITICAL_NAME_START)(void **pptr) {
   int gtid = __kmp_entry_gtid();
   MKLOC(loc, "GOMP_critical_name_start");
   KA_TRACE(20, ("GOMP_critical_name_start: T#%d\n", gtid));
-  __kmpc_critical(&loc, gtid, (kmp_critical_name *)pptr);
+  __kmp_aux_critical(&loc, gtid, (kmp_critical_name *)pptr);
 }
 
 void KMP_EXPAND_NAME(KMP_API_NAME_GOMP_CRITICAL_NAME_END)(void **pptr) {
   int gtid = __kmp_get_gtid();
   MKLOC(loc, "GOMP_critical_name_end");
   KA_TRACE(20, ("GOMP_critical_name_end: T#%d\n", gtid));
-  __kmpc_end_critical(&loc, gtid, (kmp_critical_name *)pptr);
+  __kmp_aux_end_critical(&loc, gtid, (kmp_critical_name *)pptr);
 }
 
 // The Gnu codegen tries to use locked operations to perform atomic updates
@@ -310,7 +310,7 @@ void KMP_EXPAND_NAME(KMP_API_NAME_GOMP_ORDERED_START)(void) {
 #if OMPT_SUPPORT && OMPT_OPTIONAL
   OMPT_STORE_RETURN_ADDRESS(gtid);
 #endif
-  __kmpc_ordered(&loc, gtid);
+  __kmp_aux_ordered(&loc, gtid);
 }
 
 void KMP_EXPAND_NAME(KMP_API_NAME_GOMP_ORDERED_END)(void) {
@@ -320,7 +320,7 @@ void KMP_EXPAND_NAME(KMP_API_NAME_GOMP_ORDERED_END)(void) {
 #if OMPT_SUPPORT && OMPT_OPTIONAL
   OMPT_STORE_RETURN_ADDRESS(gtid);
 #endif
-  __kmpc_end_ordered(&loc, gtid);
+  __kmp_aux_end_ordered(&loc, gtid);
 }
 
 // Dispatch macro defs
@@ -331,16 +331,16 @@ void KMP_EXPAND_NAME(KMP_API_NAME_GOMP_ORDERED_END)(void) {
 #if KMP_ARCH_X86 || KMP_ARCH_ARM || KMP_ARCH_MIPS
 #define KMP_DISPATCH_INIT __kmp_aux_dispatch_init_4
 #define KMP_DISPATCH_FINI_CHUNK __kmp_aux_dispatch_fini_chunk_4
-#define KMP_DISPATCH_NEXT __kmpc_dispatch_next_4
+#define KMP_DISPATCH_NEXT __kmp_aux_dispatch_next_4
 #else
 #define KMP_DISPATCH_INIT __kmp_aux_dispatch_init_8
 #define KMP_DISPATCH_FINI_CHUNK __kmp_aux_dispatch_fini_chunk_8
-#define KMP_DISPATCH_NEXT __kmpc_dispatch_next_8
+#define KMP_DISPATCH_NEXT __kmp_aux_dispatch_next_8
 #endif /* KMP_ARCH_X86 */
 
 #define KMP_DISPATCH_INIT_ULL __kmp_aux_dispatch_init_8u
 #define KMP_DISPATCH_FINI_CHUNK_ULL __kmp_aux_dispatch_fini_chunk_8u
-#define KMP_DISPATCH_NEXT_ULL __kmpc_dispatch_next_8u
+#define KMP_DISPATCH_NEXT_ULL __kmp_aux_dispatch_next_8u
 
 // The parallel construct
 
@@ -642,7 +642,7 @@ void KMP_EXPAND_NAME(KMP_API_NAME_GOMP_PARALLEL_END)(void) {
 
 #define KMP_DOACROSS_FINI(status, gtid)                                        \
   if (!status && __kmp_threads[gtid]->th.th_dispatch->th_doacross_flags) {     \
-    __kmpc_doacross_fini(NULL, gtid);                                          \
+    __kmp_aux_doacross_fini(NULL, gtid);                                       \
   }
 
 #define LOOP_NEXT(func, fini_code)                                             \
@@ -728,7 +728,7 @@ LOOP_NEXT(KMP_EXPAND_NAME(KMP_API_NAME_GOMP_LOOP_ORDERED_RUNTIME_NEXT),
       dims[i].up = counts[i] - 1;                                              \
       dims[i].st = 1;                                                          \
     }                                                                          \
-    __kmpc_doacross_init(&loc, gtid, (int)ncounts, dims);                      \
+    __kmp_aux_doacross_init(&loc, gtid, (int)ncounts, dims);                   \
     lb = 0;                                                                    \
     ub = counts[0];                                                            \
     str = 1;                                                                   \
@@ -775,7 +775,7 @@ LOOP_NEXT(KMP_EXPAND_NAME(KMP_API_NAME_GOMP_LOOP_ORDERED_RUNTIME_NEXT),
       dims[i].up = counts[i] - 1;                                              \
       dims[i].st = 1;                                                          \
     }                                                                          \
-    __kmpc_doacross_init(&loc, gtid, (int)ncounts, dims);                      \
+    __kmp_aux_doacross_init(&loc, gtid, (int)ncounts, dims);                   \
     lb = 0;                                                                    \
     ub = counts[0];                                                            \
     str = 1;                                                                   \
@@ -1018,7 +1018,7 @@ LOOP_NEXT_ULL(KMP_EXPAND_NAME(KMP_API_NAME_GOMP_LOOP_ULL_ORDERED_RUNTIME_NEXT),
       dims[i].up = counts[i] - 1;                                              \
       dims[i].st = 1;                                                          \
     }                                                                          \
-    __kmpc_doacross_init(&loc, gtid, (int)ncounts, dims);                      \
+    __kmp_aux_doacross_init(&loc, gtid, (int)ncounts, dims);                   \
     lb = 0;                                                                    \
     ub = counts[0];                                                            \
     str = 1;                                                                   \
@@ -1067,7 +1067,7 @@ LOOP_NEXT_ULL(KMP_EXPAND_NAME(KMP_API_NAME_GOMP_LOOP_ULL_ORDERED_RUNTIME_NEXT),
       dims[i].up = counts[i] - 1;                                              \
       dims[i].st = 1;                                                          \
     }                                                                          \
-    __kmpc_doacross_init(&loc, gtid, (int)ncounts, dims);                      \
+    __kmp_aux_doacross_init(&loc, gtid, (int)ncounts, dims);                   \
     lb = 0;                                                                    \
     ub = counts[0];                                                            \
     str = 1;                                                                   \
@@ -1245,9 +1245,9 @@ void KMP_EXPAND_NAME(KMP_API_NAME_GOMP_TASK)(void (*func)(void *), void *data,
       kmp_depend_info_t dep_list[ndeps];
       for (kmp_int32 i = 0; i < ndeps; i++)
         dep_list[i] = gomp_depends.get_kmp_depend(i);
-      __kmpc_omp_task_with_deps(&loc, gtid, task, ndeps, dep_list, 0, NULL);
+      __kmp_aux_omp_task_with_deps(&loc, gtid, task, ndeps, dep_list, 0, NULL);
     } else {
-      __kmpc_omp_task(&loc, gtid, task);
+      __kmp_aux_omp_task(&loc, gtid, task);
     }
   } else {
 #if OMPT_SUPPORT
@@ -1272,12 +1272,26 @@ void KMP_EXPAND_NAME(KMP_API_NAME_GOMP_TASK)(void (*func)(void *), void *data,
       kmp_depend_info_t dep_list[ndeps];
       for (kmp_int32 i = 0; i < ndeps; i++)
         dep_list[i] = gomp_depends.get_kmp_depend(i);
-      __kmpc_omp_wait_deps(&loc, gtid, ndeps, dep_list, 0, NULL);
+      __kmp_aux_omp_wait_deps(&loc, gtid, ndeps, dep_list, 0, NULL);
     }
 
-    __kmpc_omp_task_begin_if0(&loc, gtid, task);
+#if OMPT_SUPPORT
+    if (UNLIKELY(ompt_enabled.enabled)) {
+      __kmp_omp_task_begin_if0_ompt(&loc, gtid, task, OMPT_GET_FRAME_ADDRESS(1),
+                                    OMPT_GET_FRAME_ADDRESS(0),
+                                    OMPT_GET_RETURN_ADDRESS(0));
+    } else
+#endif
+      __kmp_omp_task_begin_if0_template<false>(&loc, gtid, task, NULL, NULL,
+                                               NULL);
     func(data);
-    __kmpc_omp_task_complete_if0(&loc, gtid, task);
+#if OMPT_SUPPORT
+    if (UNLIKELY(ompt_enabled.enabled)) {
+      __kmp_omp_task_complete_if0_ompt(&loc, gtid, task);
+      return;
+    }
+#endif
+    __kmp_omp_task_complete_if0_template<false>(&loc, gtid, task);
 
 #if OMPT_SUPPORT
     if (ompt_enabled.enabled) {
@@ -1305,7 +1319,13 @@ void KMP_EXPAND_NAME(KMP_API_NAME_GOMP_TASKWAIT)(void) {
 
   KA_TRACE(20, ("GOMP_taskwait: T#%d\n", gtid));
 
-  __kmpc_omp_taskwait(&loc, gtid);
+#if OMPT_SUPPORT && OMPT_OPTIONAL
+  if (UNLIKELY(ompt_enabled.enabled)) {
+    __kmp_omp_taskwait_ompt(&loc, gtid, OMPT_GET_FRAME_ADDRESS(0),
+                            OMPT_GET_RETURN_ADDRESS(0));
+  } else
+#endif
+    __kmp_omp_taskwait_template<false>(&loc, gtid, NULL, NULL);
 
   KA_TRACE(20, ("GOMP_taskwait exit: T#%d\n", gtid));
 }
@@ -1563,7 +1583,7 @@ void KMP_EXPAND_NAME(KMP_API_NAME_GOMP_TASKGROUP_START)(void) {
   OMPT_STORE_RETURN_ADDRESS(gtid);
 #endif
 
-  __kmpc_taskgroup(&loc, gtid);
+  __kmp_aux_taskgroup(&loc, gtid);
 
   return;
 }
@@ -1577,7 +1597,7 @@ void KMP_EXPAND_NAME(KMP_API_NAME_GOMP_TASKGROUP_END)(void) {
   OMPT_STORE_RETURN_ADDRESS(gtid);
 #endif
 
-  __kmpc_end_taskgroup(&loc, gtid);
+  __kmp_aux_end_taskgroup(&loc, gtid);
 
   return;
 }
@@ -1607,7 +1627,7 @@ bool KMP_EXPAND_NAME(KMP_API_NAME_GOMP_CANCELLATION_POINT)(int which) {
   MKLOC(loc, "GOMP_cancellation_point");
   KA_TRACE(20, ("GOMP_cancellation_point: T#%d which:%d\n", gtid, which));
   kmp_int32 cncl_kind = __kmp_gomp_to_omp_cancellation_kind(which);
-  return __kmpc_cancellationpoint(&loc, gtid, cncl_kind);
+  return __kmp_aux_cancellationpoint(&loc, gtid, cncl_kind);
 }
 
 // Return true if cancellation should take place, false otherwise
@@ -1619,9 +1639,9 @@ bool KMP_EXPAND_NAME(KMP_API_NAME_GOMP_CANCEL)(int which, bool do_cancel) {
   kmp_int32 cncl_kind = __kmp_gomp_to_omp_cancellation_kind(which);
 
   if (do_cancel == FALSE) {
-    return __kmpc_cancellationpoint(&loc, gtid, cncl_kind);
+    return __kmp_aux_cancellationpoint(&loc, gtid, cncl_kind);
   } else {
-    return __kmpc_cancel(&loc, gtid, cncl_kind);
+    return __kmp_aux_cancel(&loc, gtid, cncl_kind);
   }
 }
 
@@ -1774,9 +1794,9 @@ void __GOMP_taskloop(void (*func)(void *), void *data,
   loop_bounds = (T *)task->shareds;
   loop_bounds[0] = start;
   loop_bounds[1] = end + (up ? -1 : 1);
-  __kmpc_taskloop(&loc, gtid, task, if_val, (kmp_uint64 *)&(loop_bounds[0]),
-                  (kmp_uint64 *)&(loop_bounds[1]), (kmp_int64)step, nogroup,
-                  sched, (kmp_uint64)num_tasks, (void *)task_dup);
+  __kmp_aux_taskloop(&loc, gtid, task, if_val, (kmp_uint64 *)&(loop_bounds[0]),
+                     (kmp_uint64 *)&(loop_bounds[1]), (kmp_int64)step, nogroup,
+                     sched, (kmp_uint64)num_tasks, (void *)task_dup);
 }
 
 // 4 byte version of GOMP_doacross_post
@@ -1795,7 +1815,7 @@ template <> void __kmp_GOMP_doacross_post<long, true>(long *count) {
   for (kmp_int64 i = 0; i < num_dims; ++i) {
     vec[i] = (kmp_int64)count[i];
   }
-  __kmpc_doacross_post(&loc, gtid, vec);
+  __kmp_aux_doacross_post(&loc, gtid, vec);
   __kmp_thread_free(th, vec);
 }
 
@@ -1805,7 +1825,7 @@ template <> void __kmp_GOMP_doacross_post<long, true>(long *count) {
 template <> void __kmp_GOMP_doacross_post<long, false>(long *count) {
   int gtid = __kmp_entry_gtid();
   MKLOC(loc, "GOMP_doacross_post");
-  __kmpc_doacross_post(&loc, gtid, RCAST(kmp_int64 *, count));
+  __kmp_aux_doacross_post(&loc, gtid, RCAST(kmp_int64 *, count));
 }
 
 template <typename T> void __kmp_GOMP_doacross_wait(T first, va_list args) {
@@ -1820,7 +1840,7 @@ template <typename T> void __kmp_GOMP_doacross_wait(T first, va_list args) {
     T item = va_arg(args, T);
     vec[i] = (kmp_int64)item;
   }
-  __kmpc_doacross_wait(&loc, gtid, vec);
+  __kmp_aux_doacross_wait(&loc, gtid, vec);
   __kmp_thread_free(th, vec);
   return;
 }
@@ -1862,7 +1882,7 @@ void KMP_EXPAND_NAME(KMP_API_NAME_GOMP_DOACROSS_ULL_POST)(
     unsigned long long *count) {
   int gtid = __kmp_entry_gtid();
   MKLOC(loc, "GOMP_doacross_ull_post");
-  __kmpc_doacross_post(&loc, gtid, RCAST(kmp_int64 *, count));
+  __kmp_aux_doacross_post(&loc, gtid, RCAST(kmp_int64 *, count));
 }
 
 void KMP_EXPAND_NAME(KMP_API_NAME_GOMP_DOACROSS_ULL_WAIT)(
@@ -1886,7 +1906,8 @@ void KMP_EXPAND_NAME(KMP_API_NAME_GOMP_TEAMS_REG)(void (*fn)(void *),
   int gtid = __kmp_entry_gtid();
   KA_TRACE(20, ("GOMP_teams_reg: T#%d num_teams=%u thread_limit=%u flag=%u\n",
                 gtid, num_teams, thread_limit, flags));
-  __kmpc_push_num_teams(&loc, gtid, num_teams, thread_limit);
+  // __kmp_entry_gtid ensures a valid gtid, so directly call implementation
+  __kmp_push_num_teams(&loc, gtid, num_teams, thread_limit);
   __kmpc_fork_teams(&loc, 2, (microtask_t)__kmp_GOMP_microtask_wrapper, fn,
                     data);
   KA_TRACE(20, ("GOMP_teams_reg exit: T#%d\n", gtid));
@@ -1904,7 +1925,7 @@ void KMP_EXPAND_NAME(KMP_API_NAME_GOMP_TASKWAIT_DEPEND)(void **depend) {
 #if OMPT_SUPPORT
   OMPT_STORE_RETURN_ADDRESS(gtid);
 #endif
-  __kmpc_omp_wait_deps(&loc, gtid, ndeps, dep_list, 0, NULL);
+  __kmp_aux_omp_wait_deps(&loc, gtid, ndeps, dep_list, 0, NULL);
   KA_TRACE(20, ("GOMP_taskwait_depend exit: T#%d\n", gtid));
 }
 
