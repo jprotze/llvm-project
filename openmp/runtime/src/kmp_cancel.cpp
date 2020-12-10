@@ -58,7 +58,7 @@ kmp_int32 __kmp_aux_cancel(ident_t *loc_ref, kmp_int32 gtid,
               type = ompt_cancel_sections;
             ompt_callbacks.ompt_callback(ompt_callback_cancel)(
                 task_data, type | ompt_cancel_activated,
-                OMPT_GET_RETURN_ADDRESS(0));
+                OMPT_LOAD_RETURN_ADDRESS(gtid));
           }
 #endif // OMPT_SUPPORT && OMPT_OPTIONAL
           return 1 /* true */;
@@ -89,7 +89,7 @@ kmp_int32 __kmp_aux_cancel(ident_t *loc_ref, kmp_int32 gtid,
                                             NULL);
               ompt_callbacks.ompt_callback(ompt_callback_cancel)(
                   task_data, ompt_cancel_taskgroup | ompt_cancel_activated,
-                  OMPT_GET_RETURN_ADDRESS(0));
+                  OMPT_LOAD_RETURN_ADDRESS(gtid));
             }
 #endif
             return 1 /* true */;
@@ -124,8 +124,12 @@ execution thread needs to proceed to the end of the canceled region.
 Request cancellation of the binding OpenMP region.
 */
 kmp_int32 __kmpc_cancel(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 cncl_kind) {
+#if OMPT_SUPPORT && OMPT_OPTIONAL
+  OMPT_STORE_RETURN_ADDRESS(gtid);
+#endif
   return __kmp_aux_cancel(loc_ref, gtid, cncl_kind);
 }
+
 
 /// \see __kmpc_cancellationpoint
 kmp_int32 __kmp_aux_cancellationpoint(ident_t *loc_ref, kmp_int32 gtid,
@@ -170,7 +174,7 @@ kmp_int32 __kmp_aux_cancellationpoint(ident_t *loc_ref, kmp_int32 gtid,
                 type = ompt_cancel_sections;
               ompt_callbacks.ompt_callback(ompt_callback_cancel)(
                   task_data, type | ompt_cancel_detected,
-                  OMPT_GET_RETURN_ADDRESS(0));
+                  OMPT_LOAD_RETURN_ADDRESS(gtid));
             }
 #endif
             return 1 /* true */;
@@ -204,7 +208,7 @@ kmp_int32 __kmp_aux_cancellationpoint(ident_t *loc_ref, kmp_int32 gtid,
                                           NULL);
             ompt_callbacks.ompt_callback(ompt_callback_cancel)(
                 task_data, ompt_cancel_taskgroup | ompt_cancel_detected,
-                OMPT_GET_RETURN_ADDRESS(0));
+                OMPT_LOAD_RETURN_ADDRESS(gtid));
           }
 #endif
           return !!taskgroup->cancel_request;
@@ -237,8 +241,12 @@ Cancellation point for the encountering thread.
 */
 kmp_int32 __kmpc_cancellationpoint(ident_t *loc_ref, kmp_int32 gtid,
                                    kmp_int32 cncl_kind) {
+#if OMPT_SUPPORT && OMPT_OPTIONAL
+  OMPT_STORE_RETURN_ADDRESS(gtid);
+#endif
   return __kmp_aux_cancellationpoint(loc_ref, gtid, cncl_kind);
 }
+
 /*!
 @ingroup CANCELLATION
 @param loc_ref location of the original task directive

@@ -1186,10 +1186,10 @@ void __kmp_serialized_parallel(ident_t *loc, kmp_int32 global_tid) {
 #if OMPT_SUPPORT
   ompt_data_t ompt_parallel_data = ompt_data_none;
   ompt_data_t *implicit_task_data;
-  void *codeptr = OMPT_LOAD_RETURN_ADDRESS(global_tid);
+  void *codeptr;
   if (ompt_enabled.enabled &&
       this_thr->th.ompt_thread_info.state != ompt_state_overhead) {
-
+    codeptr = OMPT_LOAD_RETURN_ADDRESS(global_tid);
     ompt_task_info_t *parent_task_info;
     parent_task_info = OMPT_CUR_TASK_INFO(this_thr);
 
@@ -1364,7 +1364,6 @@ void __kmp_serialized_parallel(ident_t *loc, kmp_int32 global_tid) {
   if (__kmp_env_consistency_check)
     __kmp_push_parallel(global_tid, NULL);
 #if OMPT_SUPPORT
-  serial_team->t.ompt_team_info.master_return_address = codeptr;
   if (ompt_enabled.enabled &&
       this_thr->th.ompt_thread_info.state != ompt_state_overhead) {
     OMPT_CUR_TASK_INFO(this_thr)->frame.exit_frame.ptr = OMPT_GET_FRAME_ADDRESS(0);
@@ -1416,6 +1415,9 @@ int __kmp_fork_call(ident_t *loc, int gtid,
 #if KMP_NESTED_HOT_TEAMS
   kmp_hot_team_ptr_t **p_hot_teams;
 #endif
+#if OMPT_SUPPORT
+  void *return_address = NULL;
+#endif
   { // KMP_TIME_BLOCK
     KMP_TIME_DEVELOPER_PARTITIONED_BLOCK(KMP_fork_call);
     KMP_COUNT_VALUE(OMP_PARALLEL_args, argc);
@@ -1452,12 +1454,13 @@ int __kmp_fork_call(ident_t *loc, int gtid,
     ompt_data_t *parent_task_data;
     ompt_frame_t *ompt_frame;
     ompt_data_t *implicit_task_data;
-    void *return_address = NULL;
 
     if (ompt_enabled.enabled) {
       __ompt_get_task_info_internal(0, NULL, &parent_task_data, &ompt_frame,
                                     NULL, NULL);
-      return_address = OMPT_LOAD_RETURN_ADDRESS(gtid);
+      // for combined #pragma omp teams parallel, the non-root initial threads
+      // might not have a return address, so we will not assert here.
+      return_address = OMPT_LOAD_RETURN_ADDRESS_OR_NULL(gtid);
     }
 #endif
 

@@ -84,6 +84,7 @@ static bool __kmp_linear_barrier_gather_template(
     kmp_balign_team_t *team_bar = &team->t.t_bar[bt];
     int nproc = this_thr->th.th_team_nproc;
     int i;
+    OMPT_REDUCTION_DECL_IF(this_thr, gtid, reduce);
     // Don't have to worry about sleep bit here or atomic since team setting
     kmp_uint64 new_state = team_bar->b_arrived + KMP_BARRIER_STATE_BUMP;
 
@@ -126,7 +127,6 @@ static bool __kmp_linear_barrier_gather_template(
                   gtid, team->t.t_id, tid, __kmp_gtid_from_tid(i, team),
                   team->t.t_id, i));
         ANNOTATE_REDUCE_AFTER(reduce);
-        OMPT_REDUCTION_DECL(this_thr, gtid);
         OMPT_REDUCTION_BEGIN;
         (*reduce)(this_thr->th.th_local.reduce_data,
                   other_threads[i]->th.th_local.reduce_data);
@@ -322,6 +322,7 @@ __kmp_tree_barrier_gather(enum barrier_type bt, kmp_info_t *this_thr, int gtid,
     // Parent threads wait for all their children to arrive
     new_state = team->t.t_bar[bt].b_arrived + KMP_BARRIER_STATE_BUMP;
     child = 1;
+    OMPT_REDUCTION_DECL_IF(this_thr, gtid, reduce);
     do {
       kmp_info_t *child_thr = other_threads[child_tid];
       kmp_bstate_t *child_bar = &child_thr->th.th_bar[bt].bb;
@@ -354,7 +355,6 @@ __kmp_tree_barrier_gather(enum barrier_type bt, kmp_info_t *this_thr, int gtid,
                   gtid, team->t.t_id, tid, __kmp_gtid_from_tid(child_tid, team),
                   team->t.t_id, child_tid));
         ANNOTATE_REDUCE_AFTER(reduce);
-        OMPT_REDUCTION_DECL(this_thr, gtid);
         OMPT_REDUCTION_BEGIN;
         (*reduce)(this_thr->th.th_local.reduce_data,
                   child_thr->th.th_local.reduce_data);
@@ -539,6 +539,7 @@ __kmp_hyper_barrier_gather(enum barrier_type bt, kmp_info_t *this_thr, int gtid,
   /* Perform a hypercube-embedded tree gather to wait until all of the threads
      have arrived, and reduce any required data as we go.  */
   kmp_flag_64<> p_flag(&thr_bar->b_arrived);
+  OMPT_REDUCTION_DECL_IF(this_thr, gtid, reduce);
   for (level = 0, offset = 1; offset < num_threads;
        level += branch_bits, offset <<= branch_bits) {
     kmp_uint32 child;
@@ -604,7 +605,6 @@ __kmp_hyper_barrier_gather(enum barrier_type bt, kmp_info_t *this_thr, int gtid,
                   gtid, team->t.t_id, tid, __kmp_gtid_from_tid(child_tid, team),
                   team->t.t_id, child_tid));
         ANNOTATE_REDUCE_AFTER(reduce);
-        OMPT_REDUCTION_DECL(this_thr, gtid);
         OMPT_REDUCTION_BEGIN;
         (*reduce)(this_thr->th.th_local.reduce_data,
                   child_thr->th.th_local.reduce_data);

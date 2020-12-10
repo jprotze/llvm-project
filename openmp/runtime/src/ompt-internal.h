@@ -37,6 +37,7 @@ typedef struct ompt_callbacks_internal_s {
 
 typedef struct ompt_callbacks_active_s {
   unsigned int enabled : 1;
+  unsigned int initialized : 1;
 #define ompt_event_macro(event, callback, eventid) unsigned int event : 1;
 
   FOREACH_OMPT_EVENT(ompt_event_macro)
@@ -71,11 +72,17 @@ typedef struct ompt_lw_taskteam_s {
   struct ompt_lw_taskteam_s *parent;
 } ompt_lw_taskteam_t;
 
+typedef struct ompt_return_address_s {
+  struct ompt_return_address_s *next{nullptr};
+  void *addr{nullptr};
+  ompt_return_address_s(void *ra) : addr(ra) {}
+} ompt_return_address_t;
+
 typedef struct {
   ompt_data_t thread_data;
   ompt_data_t task_data; /* stored here from implicit barrier-begin until
                             implicit-task-end */
-  void *return_address; /* stored here on entry of runtime */
+  ompt_return_address_t *return_address; /* stored here on entry of runtime */
   ompt_state_t state;
   ompt_wait_id_t wait_id;
   int ompt_task_yielded;

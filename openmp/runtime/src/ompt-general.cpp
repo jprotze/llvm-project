@@ -84,7 +84,7 @@ enum tool_setting_e {
  * global variables
  ****************************************************************************/
 
-ompt_callbacks_active_t ompt_enabled;
+ompt_callbacks_active_t ompt_enabled{0};
 
 ompt_state_info_t ompt_state_info[] = {
 #define ompt_state_macro(state, code) {#state, state},
@@ -413,6 +413,7 @@ void ompt_pre_init() {
   switch (tool_setting) {
   case omp_tool_disabled:
     OMPT_VERBOSE_INIT_PRINT("OMP tool disabled. \n");
+    ompt_enabled.enabled = 0;
     break;
 
   case omp_tool_unset:
@@ -436,6 +437,7 @@ void ompt_pre_init() {
   }
   if (verbose_init && verbose_file != stderr && verbose_file != stdout)
     fclose(verbose_file);
+  ompt_enabled.initialized = 1;
 #if OMPT_DEBUG
   printf("ompt_pre_init(): ompt_enabled = %d\n", ompt_enabled);
 #endif

@@ -624,6 +624,9 @@ void __kmp_aux_end_serialized_parallel(ident_t *loc, kmp_int32 global_tid) {
 Leave a serialized parallel construct.
 */
 void __kmpc_end_serialized_parallel(ident_t *loc, kmp_int32 global_tid) {
+#if OMPT_SUPPORT
+  OMPT_STORE_RETURN_ADDRESS(global_tid);
+#endif
   __kmp_aux_end_serialized_parallel(loc, global_tid);
 }
 
@@ -704,15 +707,6 @@ void __kmp_aux_barrier(ident_t *loc, kmp_int32 global_tid) {
     __kmp_check_barrier(global_tid, ct_barrier, loc);
   }
 
-#if OMPT_SUPPORT
-  ompt_frame_t *ompt_frame;
-  if (ompt_enabled.enabled) {
-    __ompt_get_task_info_internal(0, NULL, NULL, &ompt_frame, NULL, NULL);
-    if (ompt_frame->enter_frame.ptr == NULL)
-      ompt_frame->enter_frame.ptr = OMPT_GET_FRAME_ADDRESS(0);
-  }
-  OMPT_STORE_RETURN_ADDRESS(global_tid);
-#endif
   __kmp_threads[global_tid]->th.th_ident = loc;
   // TODO: explicit barrier_wait_id:
   //   this function is called when 'barrier' directive is present or
@@ -722,11 +716,6 @@ void __kmp_aux_barrier(ident_t *loc, kmp_int32 global_tid) {
   // 4) no sync is required
 
   __kmp_barrier(bs_plain_barrier, global_tid, FALSE, 0, NULL, NULL);
-#if OMPT_SUPPORT && OMPT_OPTIONAL
-  if (ompt_enabled.enabled) {
-    ompt_frame->enter_frame = ompt_data_none;
-  }
-#endif
 }
 
 /* -------------------------------------------------------------------------- */
@@ -739,7 +728,21 @@ Execute a barrier.
 */
 void __kmpc_barrier(ident_t *loc, kmp_int32 global_tid) {
   __kmp_assert_valid_gtid(global_tid);
+#if OMPT_SUPPORT
+  ompt_frame_t *ompt_frame;
+  if (ompt_enabled.enabled) {
+    __ompt_get_task_info_internal(0, NULL, NULL, &ompt_frame, NULL, NULL);
+    if (ompt_frame->enter_frame.ptr == NULL)
+      ompt_frame->enter_frame.ptr = OMPT_GET_FRAME_ADDRESS(0);
+  }
+  OMPT_STORE_RETURN_ADDRESS(global_tid);
+#endif
   __kmp_aux_barrier(loc, global_tid);
+#if OMPT_SUPPORT && OMPT_OPTIONAL
+  if (ompt_enabled.enabled) {
+    ompt_frame->enter_frame = ompt_data_none;
+  }
+#endif
 }
 
 /* The BARRIER for a MASTER section is always explicit   */
@@ -855,7 +858,6 @@ void __kmp_aux_ordered(ident_t *loc, kmp_int32 gtid) {
   kmp_team_t *team;
   ompt_wait_id_t lck;
   void *codeptr_ra;
-  OMPT_STORE_RETURN_ADDRESS(gtid);
   if (ompt_enabled.enabled) {
     team = __kmp_team_from_gtid(gtid);
     lck = (ompt_wait_id_t)(uintptr_t)&team->t.t_ordered.dt.t_value;
@@ -896,6 +898,7 @@ void __kmp_aux_ordered(ident_t *loc, kmp_int32 gtid) {
   __kmp_itt_ordered_start(gtid);
 #endif /* USE_ITT_BUILD */
 }
+
 /*!
 @ingroup WORK_SHARING
 @param loc  source location information.
@@ -904,6 +907,9 @@ void __kmp_aux_ordered(ident_t *loc, kmp_int32 gtid) {
 Start execution of an <tt>ordered</tt> construct.
 */
 void __kmpc_ordered(ident_t *loc, kmp_int32 gtid) {
+#if OMPT_SUPPORT && OMPT_OPTIONAL
+  OMPT_STORE_RETURN_ADDRESS(gtid);
+#endif
   __kmp_aux_ordered(loc, gtid);
 }
 
@@ -928,7 +934,6 @@ void __kmp_aux_end_ordered(ident_t *loc, kmp_int32 gtid) {
     __kmp_parallel_dxo(&gtid, &cid, loc);
 
 #if OMPT_SUPPORT && OMPT_OPTIONAL
-  OMPT_STORE_RETURN_ADDRESS(gtid);
   if (ompt_enabled.ompt_callback_mutex_released) {
     ompt_callbacks.ompt_callback(ompt_callback_mutex_released)(
         ompt_mutex_ordered,
@@ -946,6 +951,9 @@ void __kmp_aux_end_ordered(ident_t *loc, kmp_int32 gtid) {
 End execution of an <tt>ordered</tt> construct.
 */
 void __kmpc_end_ordered(ident_t *loc, kmp_int32 gtid) {
+#if OMPT_SUPPORT && OMPT_OPTIONAL
+  OMPT_STORE_RETURN_ADDRESS(gtid);
+#endif
   __kmp_aux_end_ordered(loc, gtid);
 }
 
@@ -1147,9 +1155,6 @@ static kmp_user_lock_p __kmp_get_critical_section_ptr(kmp_critical_name *crit,
 void __kmp_aux_critical(ident_t *loc, kmp_int32 global_tid,
                         kmp_critical_name *crit) {
 #if KMP_USE_DYNAMIC_LOCK
-#if OMPT_SUPPORT && OMPT_OPTIONAL
-  OMPT_STORE_RETURN_ADDRESS(global_tid);
-#endif // OMPT_SUPPORT
   __kmp_aux_critical_with_hint(loc, global_tid, crit, omp_lock_hint_none);
 #else
   KMP_COUNT_BLOCK(OMP_CRITICAL);
@@ -1193,7 +1198,6 @@ void __kmp_aux_critical(ident_t *loc, kmp_int32 global_tid,
   __kmp_itt_critical_acquiring(lck);
 #endif /* USE_ITT_BUILD */
 #if OMPT_SUPPORT && OMPT_OPTIONAL
-  OMPT_STORE_RETURN_ADDRESS(gtid);
   void *codeptr_ra = NULL;
   if (ompt_enabled.enabled) {
     ti = __kmp_threads[global_tid]->th.ompt_thread_info;
@@ -1250,6 +1254,9 @@ This function blocks until the executing thread can enter the critical section.
 */
 void __kmpc_critical(ident_t *loc, kmp_int32 global_tid,
                      kmp_critical_name *crit) {
+#if OMPT_SUPPORT && OMPT_OPTIONAL
+  OMPT_STORE_RETURN_ADDRESS(global_tid);
+#endif // OMPT_SUPPORT
   __kmp_aux_critical(loc, global_tid, crit);
 }
 
@@ -1381,8 +1388,6 @@ void __kmp_aux_critical_with_hint(ident_t *loc, kmp_int32 global_tid,
   ompt_thread_info_t ti;
   // This is the case, if called from __kmpc_critical:
   void *codeptr = OMPT_LOAD_RETURN_ADDRESS(global_tid);
-  if (!codeptr)
-    codeptr = OMPT_GET_RETURN_ADDRESS(0);
 #endif
 
   KC_TRACE(10, ("__kmpc_critical: called T#%d\n", global_tid));
@@ -1493,6 +1498,7 @@ void __kmp_aux_critical_with_hint(ident_t *loc, kmp_int32 global_tid,
   KA_TRACE(15, ("__kmpc_critical: done T#%d\n", global_tid));
 } // __kmpc_critical_with_hint
 
+
 /*!
 @ingroup WORK_SHARING
 @param loc  source location information.
@@ -1508,6 +1514,9 @@ speculative execution and the hardware supports it.
 */
 void __kmpc_critical_with_hint(ident_t *loc, kmp_int32 global_tid,
                                kmp_critical_name *crit, uint32_t hint) {
+#if OMPT_SUPPORT && OMPT_OPTIONAL
+  OMPT_STORE_RETURN_ADDRESS(global_tid);
+#endif
   __kmp_aux_critical_with_hint(loc, global_tid, crit, hint);
 }
 
@@ -1589,11 +1598,10 @@ void __kmp_aux_end_critical(ident_t *loc, kmp_int32 global_tid,
 #if OMPT_SUPPORT && OMPT_OPTIONAL
   /* OMPT release event triggers after lock is released; place here to trigger
    * for all #if branches */
-  OMPT_STORE_RETURN_ADDRESS(global_tid);
   if (ompt_enabled.ompt_callback_mutex_released) {
     ompt_callbacks.ompt_callback(ompt_callback_mutex_released)(
         ompt_mutex_critical, (ompt_wait_id_t)(uintptr_t)lck,
-        OMPT_LOAD_RETURN_ADDRESS(0));
+        OMPT_LOAD_RETURN_ADDRESS(global_tid));
   }
 #endif
 
@@ -1612,6 +1620,9 @@ Leave a critical section, releasing any lock that was held during its execution.
 */
 void __kmpc_end_critical(ident_t *loc, kmp_int32 global_tid,
                          kmp_critical_name *crit) {
+#if OMPT_SUPPORT && OMPT_OPTIONAL
+  OMPT_STORE_RETURN_ADDRESS(global_tid);
+#endif
   __kmp_aux_end_critical(loc, global_tid, crit);
 }
 
@@ -2119,21 +2130,11 @@ void __kmpc_copyprivate(ident_t *loc, kmp_int32 gtid, size_t cpy_size,
 
 // Consider next barrier a user-visible barrier for barrier region boundaries
 // Nesting checks are already handled by the single construct checks
-  {
-#if OMPT_SUPPORT
-    OMPT_STORE_RETURN_ADDRESS(gtid);
-#endif
 #if USE_ITT_NOTIFY
   __kmp_threads[gtid]->th.th_ident = loc; // TODO: check if it is needed (e.g.
 // tasks can overwrite the location)
 #endif
   __kmp_barrier(bs_plain_barrier, gtid, FALSE, 0, NULL, NULL);
-#if OMPT_SUPPORT && OMPT_OPTIONAL
-  if (ompt_enabled.enabled) {
-    ompt_frame->enter_frame = ompt_data_none;
-  }
-#endif
-  }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -3410,6 +3411,9 @@ __kmpc_reduce_nowait(ident_t *loc, kmp_int32 global_tid, kmp_int32 num_vars,
 
   __kmp_resume_if_soft_paused();
 
+#if OMPT_SUPPORT && OMPT_OPTIONAL
+  OMPT_STORE_RETURN_ADDRESS(global_tid);
+#endif
 // check correctness of reduce block nesting
 #if KMP_USE_DYNAMIC_LOCK
   if (__kmp_env_consistency_check)
@@ -3498,7 +3502,6 @@ __kmpc_reduce_nowait(ident_t *loc, kmp_int32 global_tid, kmp_int32 num_vars,
       if (ompt_frame->enter_frame.ptr == NULL)
         ompt_frame->enter_frame.ptr = OMPT_GET_FRAME_ADDRESS(0);
     }
-    OMPT_STORE_RETURN_ADDRESS(global_tid);
 #endif
 #if USE_ITT_NOTIFY
     __kmp_threads[global_tid]->th.th_ident = loc;
@@ -3552,6 +3555,9 @@ void __kmpc_end_reduce_nowait(ident_t *loc, kmp_int32 global_tid,
 
   KA_TRACE(10, ("__kmpc_end_reduce_nowait() enter: called T#%d\n", global_tid));
   __kmp_assert_valid_gtid(global_tid);
+#if OMPT_SUPPORT && OMPT_OPTIONAL
+  OMPT_STORE_RETURN_ADDRESS(global_tid);
+#endif
 
   packed_reduction_method = __KMP_GET_REDUCTION_METHOD(global_tid);
 
@@ -3639,6 +3645,9 @@ kmp_int32 __kmpc_reduce(ident_t *loc, kmp_int32 global_tid, kmp_int32 num_vars,
 
   __kmp_resume_if_soft_paused();
 
+#if OMPT_SUPPORT && OMPT_OPTIONAL
+  OMPT_STORE_RETURN_ADDRESS(global_tid);
+#endif
 // check correctness of reduce block nesting
 #if KMP_USE_DYNAMIC_LOCK
   if (__kmp_env_consistency_check)
@@ -3687,7 +3696,6 @@ kmp_int32 __kmpc_reduce(ident_t *loc, kmp_int32 global_tid, kmp_int32 num_vars,
       if (ompt_frame->enter_frame.ptr == NULL)
         ompt_frame->enter_frame.ptr = OMPT_GET_FRAME_ADDRESS(0);
     }
-    OMPT_STORE_RETURN_ADDRESS(global_tid);
 #endif
 #if USE_ITT_NOTIFY
     __kmp_threads[global_tid]->th.th_ident =
@@ -3747,6 +3755,9 @@ void __kmpc_end_reduce(ident_t *loc, kmp_int32 global_tid,
   KA_TRACE(10, ("__kmpc_end_reduce() enter: called T#%d\n", global_tid));
   __kmp_assert_valid_gtid(global_tid);
 
+#if OMPT_SUPPORT && OMPT_OPTIONAL
+  OMPT_STORE_RETURN_ADDRESS(global_tid);
+#endif
   th = __kmp_thread_from_gtid(global_tid);
   teams_swapped = __kmp_swap_teams_for_teams_reduction(th, &team, &task_state);
 
@@ -3769,7 +3780,6 @@ void __kmpc_end_reduce(ident_t *loc, kmp_int32 global_tid,
       if (ompt_frame->enter_frame.ptr == NULL)
         ompt_frame->enter_frame.ptr = OMPT_GET_FRAME_ADDRESS(0);
     }
-    OMPT_STORE_RETURN_ADDRESS(global_tid);
 #endif
 #if USE_ITT_NOTIFY
     __kmp_threads[global_tid]->th.th_ident = loc;
@@ -3795,7 +3805,6 @@ void __kmpc_end_reduce(ident_t *loc, kmp_int32 global_tid,
       if (ompt_frame->enter_frame.ptr == NULL)
         ompt_frame->enter_frame.ptr = OMPT_GET_FRAME_ADDRESS(0);
     }
-    OMPT_STORE_RETURN_ADDRESS(global_tid);
 #endif
 #if USE_ITT_NOTIFY
     __kmp_threads[global_tid]->th.th_ident = loc;
@@ -3816,7 +3825,6 @@ void __kmpc_end_reduce(ident_t *loc, kmp_int32 global_tid,
       if (ompt_frame->enter_frame.ptr == NULL)
         ompt_frame->enter_frame.ptr = OMPT_GET_FRAME_ADDRESS(0);
     }
-    OMPT_STORE_RETURN_ADDRESS(global_tid);
 #endif
 // TODO: implicit barrier: should be exposed
 #if USE_ITT_NOTIFY

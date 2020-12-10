@@ -515,7 +515,7 @@ kmp_int32 __kmp_aux_omp_task_with_deps(ident_t *loc_ref, kmp_int32 gtid,
           current_task ? &(current_task->ompt_task_info.frame) : NULL,
           &(new_taskdata->ompt_task_info.task_data),
           ompt_task_explicit | TASK_TYPE_DETAILS_FORMAT(new_taskdata), 1,
-          OMPT_LOAD_OR_GET_RETURN_ADDRESS(gtid));
+          OMPT_LOAD_RETURN_ADDRESS(gtid));
     }
 
     new_taskdata->ompt_task_info.frame.enter_frame.ptr = OMPT_GET_FRAME_ADDRESS(0);
@@ -643,6 +643,9 @@ kmp_int32 __kmpc_omp_task_with_deps(ident_t *loc_ref, kmp_int32 gtid,
                                     kmp_depend_info_t *dep_list,
                                     kmp_int32 ndeps_noalias,
                                     kmp_depend_info_t *noalias_dep_list) {
+#if OMPT_SUPPORT
+  OMPT_STORE_RETURN_ADDRESS(gtid);
+#endif
   return __kmp_aux_omp_task_with_deps(loc_ref, gtid, new_task, ndeps, dep_list,
                                       ndeps_noalias, noalias_dep_list);
 }
@@ -700,7 +703,7 @@ void __kmp_aux_omp_wait_deps(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 ndeps,
           current_task ? &(current_task->ompt_task_info.frame) : NULL,
           taskwait_task_data,
           ompt_task_explicit | ompt_task_undeferred | ompt_task_mergeable, 1,
-          OMPT_LOAD_OR_GET_RETURN_ADDRESS(gtid));
+          OMPT_LOAD_RETURN_ADDRESS(gtid));
     }
   }
 
@@ -816,6 +819,9 @@ Blocks the current task until all specifies dependencies have been fulfilled.
 void __kmpc_omp_wait_deps(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 ndeps,
                           kmp_depend_info_t *dep_list, kmp_int32 ndeps_noalias,
                           kmp_depend_info_t *noalias_dep_list) {
+#if OMPT_SUPPORT
+  OMPT_STORE_RETURN_ADDRESS(gtid);
+#endif
   return __kmp_aux_omp_wait_deps(loc_ref, gtid, ndeps, dep_list, ndeps_noalias,
                                  noalias_dep_list);
 }
