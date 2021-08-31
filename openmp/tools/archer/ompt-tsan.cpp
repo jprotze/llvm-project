@@ -217,6 +217,9 @@ void __attribute__((weak)) __tsan_func_exit(void) {}
 static ompt_get_parallel_info_t ompt_get_parallel_info;
 static ompt_get_thread_data_t ompt_get_thread_data;
 
+typedef int (*ompt_get_task_memory_t)(void **addr, size_t *size, int blocknum);
+static ompt_get_task_memory_t ompt_get_task_memory;
+
 typedef char ompt_tsan_clockid;
 
 static uint64_t my_next_id() {
@@ -513,6 +516,9 @@ struct TaskData final : DataPoolEntry<TaskData> {
 
   /// Number of dependency entries.
   unsigned DependencyCount{0};
+  
+  void* TaskMemory{nullptr};
+  size_t TaskMemorySize{0};
 
   // The dependency-map stores DependencyData objects representing
   // the dependency variables used on the sibling tasks created from
@@ -580,6 +586,8 @@ struct TaskData final : DataPoolEntry<TaskData> {
       free(Dependencies);
     Dependencies = nullptr;
     DependencyCount = 0;
+    TaskMemory = nullptr;
+    TaskMemorySize = 0;
 #ifdef DEBUG
     freed = 0;
 #endif
@@ -959,6 +967,10 @@ static void ompt_tsan_task_schedule(ompt_data_t *first_task_data,
 
     // release dependencies
     releaseDependencies(FromTask);
+    if (ompt_get_task_memory) {
+      if (FromTask->TaskMemorySize>0)
+        TsanNewMemory(((void**)FromTask->TaskMemory), FromTask->TaskMemorySize + 8);
+    }
     // free the previously running task
     freeTask(FromTask);
   }
@@ -990,6 +1002,11 @@ static void ompt_tsan_task_schedule(ompt_data_t *first_task_data,
   if (ToTask->execution == 0) {
     ToTask->execution++;
     acquireDependencies(ToTask);
+    if (ompt_get_task_memory) {
+      ompt_get_task_memory(&ToTask->TaskMemory, &ToTask->TaskMemorySize, 0);
+      if (ToTask->TaskMemorySize>0)
+        TsanNewMemory(((void**)ToTask->TaskMemory), ToTask->TaskMemorySize + 8);
+    }
   }
   // 1. Task will begin execution after it has been created.
   // 2. Task will resume after it has been switched away.
@@ -1081,6 +1098,7 @@ static int ompt_tsan_initialize(ompt_function_lookup_t lookup, int device_num,
   ompt_get_parallel_info =
       (ompt_get_parallel_info_t)lookup("ompt_get_parallel_info");
   ompt_get_thread_data = (ompt_get_thread_data_t)lookup("ompt_get_thread_data");
+  ompt_get_task_memory = (ompt_get_task_memory_t)lookup("ompt_get_task_memory");
 
   if (ompt_get_parallel_info == NULL) {
     fprintf(stderr, "Could not get inquiry function 'ompt_get_parallel_info', "
