@@ -353,7 +353,7 @@ template <typename T, int N = 1, bool Ring = false> struct DataPool {
   };
 
   virtual void newDatas() {
-    if (Ring && LocalDataPointer.size() > 0) {
+    if (Ring && LocalDataPointer.size() > remote) {
       DataPointer.swap(LocalDataPointer);
       std::reverse(DataPointer.begin(), DataPointer.end());
       return;
