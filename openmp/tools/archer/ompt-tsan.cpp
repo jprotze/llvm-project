@@ -311,11 +311,13 @@ std::mutex outputMutex{};
 
 static int pagesize{0};
 // Data structure to provide a threadsafe pool of reusable objects.
-// DataPool<Type of objects, Size of blockalloc in pages>
-template <typename T, int N = 1> struct DataPool {
+// DataPool<Type of objects, Size of blockalloc in pages,
+//          Ring: FIFO(true)/LIFO(false)>
+template <typename T, int N = 1, bool Ring = false> struct DataPool {
   std::mutex DPMutex;
   // store unused objects
   std::vector<T *> DataPointer;
+  std::vector<T *> LocalDataPointer;
   std::vector<T *> RemoteDataPointer;
   // store all allocated memory to finally release
   std::list<void *> memory;
@@ -329,7 +331,8 @@ template <typename T, int N = 1> struct DataPool {
   virtual int getLocal() { return localReturn; }
   virtual int getTotal() { return total; }
   virtual int getMissing() {
-    return total - DataPointer.size() - RemoteDataPointer.size();
+    return total - DataPointer.size() - LocalDataPointer.size() -
+           RemoteDataPointer.size();
   }
 
   // prefix the Data with a pointer to 'this', allows to return memory to
@@ -345,17 +348,24 @@ template <typename T, int N = 1> struct DataPool {
   // executed by other threads.
   // The master will have a high demand on TaskData, so return after use.
   struct pooldata {
-    DataPool<T, N> *dp;
+    DataPool<T, N, Ring> *dp;
     T data;
   };
 
   virtual void newDatas() {
+    if (Ring && LocalDataPointer.size() > 0) {
+      DataPointer.swap(LocalDataPointer);
+      std::reverse(DataPointer.begin(), DataPointer.end());
+      return;
+    }
     if (remote > 0) {
       DPMutex.lock();
       remoteReturn++;
       DataPointer.swap(RemoteDataPointer);
       remote = 0;
       DPMutex.unlock();
+      if (Ring)
+        std::reverse(DataPointer.begin(), DataPointer.end());
       return;
     }
     // calculate size of an object including padding to cacheline size
@@ -383,7 +393,11 @@ template <typename T, int N = 1> struct DataPool {
   }
 
   virtual void returnOwnData(T *data) {
-    DataPointer.emplace_back(data);
+    // We only need two vectors, if we want FIFO-like use of data
+    if (Ring)
+      LocalDataPointer.emplace_back(data);
+    else
+      DataPointer.emplace_back(data);
     localReturn++;
   }
 
@@ -399,7 +413,7 @@ template <typename T, int N = 1> struct DataPool {
   // A pointer to the originating DataPool is stored just before the actual
   // data.
   static void retData(void *data) {
-    ((DataPool<T, N> **)data)[-1]->returnData((T *)data);
+    ((DataPool<T, N, Ring> **)data)[-1]->returnData((T *)data);
   }
 
   DataPool()
@@ -417,7 +431,8 @@ template <typename T, int N = 1> struct DataPool {
 
 // Data structure to provide a threadsafe pool of reusable objects.
 // DataPool<Type of objects, Size of blockalloc>
-template <typename T, int N> struct PDataPool : public DataPool<T, N> {
+template <typename T, int N, bool Ring = false>
+struct PDataPool : public DataPool<T, N, Ring> {
   void newDatas() {
     if (this->remote > 0) {
       this->DPMutex.lock();
@@ -440,7 +455,7 @@ template <typename T, int N> struct PDataPool : public DataPool<T, N> {
     // executed by other threads.
     // The master will have a high demand on TaskData, so return after use.
     struct pooldata {
-      DataPool<T, N> *dp;
+      PDataPool<T, N, Ring> *dp;
       T data;
     };
     // We alloc without initialize the memory. We cannot call constructors.
@@ -457,6 +472,8 @@ template <typename T, int N> struct PDataPool : public DataPool<T, N> {
   ~PDataPool() {
     for (auto i : this->DataPointer)
       i->fini();
+    for (auto i : this->LocalDataPointer)
+      i->fini();
     for (auto i : this->RemoteDataPointer)
       i->fini();
     // we assume all memory is returned when the thread finished / destructor is
@@ -469,14 +486,16 @@ template <typename T, int N> struct PDataPool : public DataPool<T, N> {
 
 // This function takes care to return the data to the originating DataPool
 // A pointer to the originating DataPool is stored just before the actual data.
-template <typename T, int N> static void retData(void *data) {
-  ((DataPool<T, N> **)data)[-1]->returnData((T *)data);
+template <typename T, int N = 1, bool R = false>
+static void retData(void *data) {
+  ((DataPool<T, N, R> **)data)[-1]->returnData((T *)data);
 }
 
-static __thread PDataPool<FiberData, 4> *fdp{nullptr};
+static __thread PDataPool<FiberData, 4, true> *fdp{nullptr};
 
-template <> void retData<FiberData, 4>(void *data) {
-  PDataPool<FiberData, 4> *pool = ((PDataPool<FiberData, 4> **)data)[-1];
+template <> void retData<FiberData, 4, true>(void *data) {
+  PDataPool<FiberData, 4, true> *pool =
+      ((PDataPool<FiberData, 4, true> **)data)[-1];
   if (pool == fdp)
     pool->returnOwnData((FiberData *)data);
   else
@@ -528,7 +547,7 @@ struct FiberData {
   ~FiberData() {}
   // overload new/delete to use DataPool for memory management.
   void *operator new(size_t size) { return fdp->getData(); }
-  void operator delete(void *p, size_t) { retData<FiberData, 4>(p); }
+  void operator delete(void *p, size_t) { retData<FiberData, 4, true>(p); }
 };
 __thread FiberData *FiberData::currentFiber{nullptr};
 
@@ -639,7 +658,7 @@ struct TaskData;
 typedef DataPool<TaskData> TaskDataPool;
 __thread TaskDataPool *tdp;
 
-template <> void retData<TaskData, 1>(void *data) {
+template <> void retData<TaskData>(void *data) {
   TaskDataPool *pool = ((TaskDataPool **)data)[-1];
   if (pool == tdp)
     pool->returnOwnData((TaskData *)data);
@@ -749,7 +768,7 @@ struct TaskData {
   void *GetTaskwaitPtr() { return &Taskwait; }
   // overload new/delete to use DataPool for memory management.
   void *operator new(size_t size) { return tdp->getData(); }
-  void operator delete(void *p, size_t) { retData<TaskData, 1>(p); }
+  void operator delete(void *p, size_t) { retData<TaskData>(p); }
 };
 
 static inline TaskData *ToTaskData(ompt_data_t *task_data) {
@@ -789,7 +808,7 @@ static void ompt_tsan_thread_begin(ompt_thread_t thread_type,
   tdp = new TaskDataPool;
   TsanNewMemory(tdp, sizeof(tdp));
   if (archer_flags->tasking) {
-    fdp = new PDataPool<FiberData, 4>;
+    fdp = new PDataPool<FiberData, 4, true>;
     TsanNewMemory(fdp, sizeof(fdp));
     if (!Fiber) {
       Fiber = TsanGetCurrentFiber();
