@@ -551,6 +551,8 @@ void ThreadIgnoreBegin(ThreadState *thr, uptr pc);
 void ThreadIgnoreEnd(ThreadState *thr);
 void ThreadIgnoreSyncBegin(ThreadState *thr, uptr pc);
 void ThreadIgnoreSyncEnd(ThreadState *thr);
+void ThreadIgnoreInterceptorsBegin(ThreadState *thr, uptr pc);
+void ThreadIgnoreInterceptorsEnd(ThreadState *thr);
 
 Tid ThreadCreate(ThreadState *thr, uptr pc, uptr uid, bool detached);
 void ThreadStart(ThreadState *thr, Tid tid, tid_t os_id,
@@ -586,6 +588,7 @@ void MutexRepair(ThreadState *thr, uptr pc, uptr addr);  // call on EOWNERDEAD
 void MutexInvalidAccess(ThreadState *thr, uptr pc, uptr addr);
 
 void Acquire(ThreadState *thr, uptr pc, uptr addr);
+void AcquireStore(ThreadState *thr, uptr pc, uptr addr);
 // AcquireGlobal synchronizes the current thread with all other threads.
 // In terms of happens-before relation, it draws a HB edge from all threads
 // (where they happen to execute right now) to the current thread. We use it to

@@ -339,12 +339,16 @@ void FiberSwitchImpl(ThreadState *from, ThreadState *to) {
 
 ThreadState *FiberCreate(ThreadState *thr, uptr pc, unsigned flags) {
   void *mem = Alloc(sizeof(ThreadState));
+  if ((flags & FiberSwitchFlagNoSync))
+    thr->ignore_sync++;
   ThreadState *fiber = static_cast<ThreadState *>(mem);
   internal_memset(fiber, 0, sizeof(*fiber));
   Tid tid = ThreadCreate(thr, pc, 0, true);
   FiberSwitchImpl(thr, fiber);
   ThreadStart(fiber, tid, 0, ThreadType::Fiber);
   FiberSwitchImpl(fiber, thr);
+  if ((flags & FiberSwitchFlagNoSync))
+    thr->ignore_sync--;
   return fiber;
 }
 

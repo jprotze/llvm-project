@@ -10,6 +10,16 @@
 //
 //===----------------------------------------------------------------------===//
 
+#if (defined __APPLE__) || (defined __MACH__) || (defined __linux__) || \
+    (defined linux) || (defined __linux)
+#  ifndef _GNU_SOURCE
+#    define _GNU_SOURCE 1
+#  endif
+#  include <dlfcn.h>
+#endif
+
+#include "llvm/Config/config.h"
+#include "sanitizer_common/sanitizer_common.h"
 #include "sanitizer_common/sanitizer_libc.h"
 #include "sanitizer_common/sanitizer_placement_new.h"
 #include "sanitizer_common/sanitizer_stackdepot.h"
@@ -35,9 +45,29 @@ static ReportStack *SymbolizeStack(StackTrace trace);
 #ifdef TSAN_EXTERNAL_HOOKS
 bool OnReport(const ReportDesc *rep, bool suppressed);
 #else
+typedef bool (*OnReportFp)(const ReportDesc *, bool, int);
+
 SANITIZER_WEAK_CXX_DEFAULT_IMPL
 bool OnReport(const ReportDesc *rep, bool suppressed) {
+  static OnReportFp f = nullptr;
+  static bool tried = false;
   (void)rep;
+  if (!tried) {
+    tried = true;
+#  if (defined __APPLE__) || (defined __MACH__)
+    dlerror();
+    f = (OnReportFp)dlsym(RTLD_DEFAULT, "TsanOnReport");
+    dlerror();
+#  elif (defined __linux__) || (defined linux) || (defined __linux)
+    dlerror();
+    f = (OnReportFp)dlsym(RTLD_NEXT, "TsanOnReport");
+    dlerror();
+#  else
+    return suppressed;
+#  endif
+  }
+  if (f)
+    return (*f)(rep, suppressed, LLVM_VERSION_MAJOR);
   return suppressed;
 }
 #endif
