@@ -64,7 +64,6 @@ public:
   int enabled{1};
   int report_data_leak{0};
   int ignore_serial{0};
-  std::atomic<int> all_memory{0};
   int tasking{0};
   std::atomic<int> untieds{0};
 
@@ -74,7 +73,6 @@ public:
       std::string token;
       std::string str(env);
       std::istringstream iss(str);
-      int tmp_int;
       while (std::getline(iss, token, ' '))
         tokens.push_back(token);
 
@@ -96,10 +94,6 @@ public:
           continue;
         if (sscanf(it->c_str(), "ignore_serial=%d", &ignore_serial))
           continue;
-        if (sscanf(it->c_str(), "all_memory=%d", &tmp_int)) {
-          all_memory = tmp_int;
-          continue;
-        }
         std::cerr << "Illegal values for ARCHER_OPTIONS variable: " << token
                   << std::endl;
       }
@@ -463,9 +457,6 @@ struct TaskData final : DataPoolEntry<TaskData> {
   /// this task.
   ompt_tsan_clockid Taskwait{0};
 
-  /// Child tasks use its address to model omp_all_memory dependencies
-  ompt_tsan_clockid AllMemory[2]{0};
-
   /// Whether this task is currently executing a barrier.
   bool InBarrier{false};
 
@@ -527,15 +518,9 @@ struct TaskData final : DataPoolEntry<TaskData> {
   bool isInitial() { return TaskType & ompt_task_initial; }
   bool isTarget() { return TaskType & ompt_task_target; }
 
-  void setAllMemoryDep() { AllMemory[0] = 1; }
-  bool hasAllMemoryDep() { return AllMemory[0]; }
-
   void *GetTaskPtr() { return &Task; }
 
   void *GetTaskwaitPtr() { return &Taskwait; }
-
-  void *GetLastAllMemoryPtr() { return AllMemory; }
-  void *GetNextAllMemoryPtr() { return AllMemory + 1; }
 
   TaskData *Init(TaskData *parent, int taskType) {
     TaskType = taskType;
@@ -899,30 +884,13 @@ static void freeTask(TaskData *task) {
   }
 }
 
-// LastAllMemoryPtr marks the beginning of an all_memory epoch
-// NextAllMemoryPtr marks the end of an all_memory epoch
-// All tasks with depend begin execution after LastAllMemoryPtr
-// and end before NextAllMemoryPtr
 static void releaseDependencies(TaskData *task) {
-  if (archer_flags->all_memory) {
-    if (task->hasAllMemoryDep()) {
-      TsanHappensBefore(task->Parent->GetLastAllMemoryPtr());
-      TsanHappensBefore(task->Parent->GetNextAllMemoryPtr());
-    } else if (task->DependencyCount)
-      TsanHappensBefore(task->Parent->GetNextAllMemoryPtr());
-  }
   for (unsigned i = 0; i < task->DependencyCount; i++) {
     task->Dependencies[i].AnnotateEnd();
   }
 }
 
 static void acquireDependencies(TaskData *task) {
-  if (archer_flags->all_memory) {
-    if (task->hasAllMemoryDep())
-      TsanHappensAfter(task->Parent->GetNextAllMemoryPtr());
-    else if (task->DependencyCount)
-      TsanHappensAfter(task->Parent->GetLastAllMemoryPtr());
-  }
   for (unsigned i = 0; i < task->DependencyCount; i++) {
     task->Dependencies[i].AnnotateBegin();
   }
@@ -1078,21 +1046,6 @@ static void ompt_tsan_dependences(ompt_data_t *task_data,
         (TaskDependency *)malloc(sizeof(TaskDependency) * ndeps);
     Data->DependencyCount = ndeps;
     for (int i = 0, d = 0; i < ndeps; i++, d++) {
-      if (deps[i].dependence_type == ompt_dependence_type_out_all_memory ||
-          deps[i].dependence_type == ompt_dependence_type_inout_all_memory) {
-        Data->setAllMemoryDep();
-        Data->DependencyCount--;
-        if (!archer_flags->all_memory) {
-          printf("The application uses omp_all_memory, but Archer was\n"
-                 "started to not consider omp_all_memory. This can lead\n"
-                 "to false data race alerts.\n"
-                 "Include all_memory=1 in ARCHER_OPTIONS to consider\n"
-                 "omp_all_memory from the beginning.\n");
-          archer_flags->all_memory = 1;
-        }
-        d--;
-        continue;
-      }
       auto ret = Data->Parent->DependencyMap->insert(
           std::make_pair(deps[i].variable.ptr, nullptr));
       if (ret.second) {
