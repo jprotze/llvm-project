@@ -444,6 +444,10 @@ struct Taskgroup final : DataPoolEntry<Taskgroup> {
   Taskgroup(DataPool<Taskgroup> *dp) : DataPoolEntry<Taskgroup>(dp) {}
 };
 
+enum ArcherTaskFlag{
+  ArcherTaskFulfilled = 0x00010000
+};
+
 struct TaskData;
 typedef DataPool<TaskData> TaskDataPool;
 template <> __thread TaskDataPool *TaskDataPool::ThreadDataPool = nullptr;
@@ -457,6 +461,9 @@ struct TaskData final : DataPoolEntry<TaskData> {
   /// this task.
   ompt_tsan_clockid Taskwait{0};
 
+  /// Index of which barrier to use next.
+  char BarrierIndex{0};
+
   /// Whether this task is currently executing a barrier.
   bool InBarrier{false};
 
@@ -466,8 +473,8 @@ struct TaskData final : DataPoolEntry<TaskData> {
   /// count execution phase
   int execution{0};
 
-  /// Index of which barrier to use next.
-  char BarrierIndex{0};
+  size_t PrivateDataSize{0};
+  void* PrivateDataAddr{nullptr};
 
   /// Count how often this structure has been put into child tasks + 1.
   std::atomic_int RefCount{1};
@@ -518,6 +525,9 @@ struct TaskData final : DataPoolEntry<TaskData> {
   bool isInitial() { return TaskType & ompt_task_initial; }
   bool isTarget() { return TaskType & ompt_task_target; }
 
+  bool isFulfilled() { return TaskType & ArcherTaskFulfilled; }
+  void setFulfilled() { TaskType |= ArcherTaskFulfilled; }
+
   void *GetTaskPtr() { return &Task; }
 
   void *GetTaskwaitPtr() { return &Taskwait; }
@@ -560,6 +570,8 @@ struct TaskData final : DataPoolEntry<TaskData> {
     ImplicitTask = nullptr;
     Team = nullptr;
     TaskGroup = nullptr;
+    PrivateDataSize = 0;
+    PrivateDataAddr = nullptr;
     if (DependencyMap) {
       for (auto i : *DependencyMap)
         i.second->Delete();
@@ -919,10 +931,14 @@ static void ompt_tsan_task_schedule(ompt_data_t *first_task_data,
   //     -> first suspended, second starts
   //
 
-  if (prior_task_status == ompt_task_early_fulfill)
-    return;
-
   TaskData *FromTask = ToTaskData(first_task_data);
+
+  if (prior_task_status == ompt_task_early_fulfill){
+    // the omp_fulfill_event call happens before the task can complete
+    TsanHappensBefore(FromTask->GetTaskPtr());
+    FromTask->setFulfilled();
+    return;
+  }
 
   // Legacy handling for missing reduction callback
   if (hasReductionCallback < ompt_set_always && FromTask->InBarrier) {
@@ -939,6 +955,9 @@ static void ompt_tsan_task_schedule(ompt_data_t *first_task_data,
   if (prior_task_status == ompt_task_complete ||
       prior_task_status == ompt_task_cancel ||
       prior_task_status == ompt_task_late_fulfill) {
+    // Task-end happens after a possible omp_fulfill_event call
+    if (FromTask->isFulfilled())
+      TsanHappensAfter(FromTask->GetTaskPtr());
     // Included tasks are executed sequentially, no need to track
     // synchronization
     if (!FromTask->isIncluded()) {
@@ -960,19 +979,24 @@ static void ompt_tsan_task_schedule(ompt_data_t *first_task_data,
 
     // release dependencies
     releaseDependencies(FromTask);
-    if (prior_task_status == ompt_task_complete && !FromTask->isIncluded() && !FromTask->isUntied())
-      ToTaskData(second_task_data)
-          ->activate(); // must switch to next task before deleting the previous
-    /*if (archer_flags->tasking && ompt_get_task_memory) {
-      void *addr;
+    if (ompt_get_task_memory) {
+/*      void *addr;
       size_t size;
       int ret_task_memory = 0, block = 0;
       do {
+        size=0;
         ret_task_memory = ompt_get_task_memory(&addr, &size, block++);
-        if (size>0)
+        if (size>0) {
           TsanNewMemory(((void**)addr), size+8);
-      } while (ret_task_memory);
-    }*/
+
+        }
+      } while (ret_task_memory);*/
+      if (FromTask->PrivateDataSize>0)
+        TsanNewMemory((/*(void**)*/FromTask->PrivateDataAddr), FromTask->PrivateDataSize+8);
+    }
+    if (prior_task_status == ompt_task_complete && !FromTask->isIncluded() && !FromTask->isUntied())
+      ToTaskData(second_task_data)
+          ->activate(); // must switch to next task before deleting the previous
     // free the previously running task
     freeTask(FromTask);
   } else {
@@ -1007,17 +1031,22 @@ static void ompt_tsan_task_schedule(ompt_data_t *first_task_data,
 
   // Handle dependencies on first execution of the task
   if (ToTask->execution == 0) {
+    if (ompt_get_task_memory) {
+      void *addr;
+      size_t size;
+      int ret_task_memory = 0, block=0;
+      do {
+        size=0;
+        ret_task_memory = ompt_get_task_memory(&addr, &size, block++);
+        if (size>0){
+          TsanNewMemory((/*(void**)*/addr), size+8);
+          ToTask->PrivateDataAddr = addr;
+          ToTask->PrivateDataSize = size;
+//          printf("NewMemory(%p, %zu)\n",addr, size);
+        }
+      } while (ret_task_memory);
+    }
     if (archer_flags->tasking) {
-      if (ompt_get_task_memory) {
-        void *addr;
-        size_t size;
-        int ret_task_memory = 0, block=0;
-        do {
-          ret_task_memory = ompt_get_task_memory(&addr, &size, block++);
-          if (size>0)
-            TsanNewMemory(((void**)addr), size+8);
-        } while (ret_task_memory);
-      }
       TsanNewMemory((char*)__builtin_frame_address(0)-1024, 1024);
     }
     ToTask->execution++;
@@ -1221,9 +1250,15 @@ ompt_start_tool(unsigned int omp_version, const char *runtime_version) {
     return NULL;
   }
 
-  if (archer_flags->verbose)
-    std::cout << "Archer detected OpenMP application with TSan, supplying "
-                 "OpenMP synchronization semantics"
-              << std::endl;
+  if (archer_flags->verbose) {
+    if (archer_flags->tasking)
+      std::cout << "Archer detected OpenMP application with TSan, supplying "
+                  "OpenMP tasking synchronization semantics"
+                << std::endl;
+    else
+      std::cout << "Archer detected OpenMP application with TSan, supplying "
+                  "OpenMP synchronization semantics"
+                << std::endl;
+  }
   return &ompt_start_tool_result;
 }
