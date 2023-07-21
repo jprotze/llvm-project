@@ -91,7 +91,7 @@ void LibIgnore::OnLibraryLoaded(const char *name) {
       Report("%s: library '%s' that was matched against called_from_lib"
              " suppression '%s' is unloaded\n",
              SanitizerToolName, lib->name, lib->templ);
-      Die();
+      //Die();
     }
   }
 

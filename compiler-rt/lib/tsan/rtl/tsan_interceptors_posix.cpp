@@ -248,11 +248,11 @@ ScopedInterceptor::ScopedInterceptor(ThreadState *thr, const char *fname,
     : thr_(thr), in_ignored_lib_(false), ignoring_(false) {
   LazyInitialize(thr);
   if (!thr_->is_inited) return;
-  if (!thr_->ignore_interceptors) FuncEntry(thr, pc);
   DPrintf("#%d: intercept %s()\n", thr_->tid, fname);
   ignoring_ =
       !thr_->in_ignored_lib && (flags()->ignore_interceptors_accesses ||
                                 libignore()->IsIgnored(pc, &in_ignored_lib_));
+  if (!thr_->ignore_interceptors && !ignoring_) FuncEntry(thr, pc);
   EnableIgnores();
 }
 
@@ -261,7 +261,8 @@ ScopedInterceptor::~ScopedInterceptor() {
   DisableIgnores();
   if (!thr_->ignore_interceptors) {
     ProcessPendingSignals(thr_);
-    FuncExit(thr_);
+    if (!ignoring_)
+      FuncExit(thr_);
     CheckedMutex::CheckNoLocks();
   }
 }
