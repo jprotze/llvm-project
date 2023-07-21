@@ -70,29 +70,38 @@ public:
   ArcherFlags(const char *env) {
     if (env) {
       std::vector<std::string> tokens;
-      std::string token;
       std::string str(env);
-      std::istringstream iss(str);
-      while (std::getline(iss, token, ' '))
-        tokens.push_back(token);
+      auto end = str.end();
+      auto it = str.begin();
+      auto is_sep = [](char c) {
+        return c == ' ' || c == ',' || c == ':' || c == '\n' || c == '\t' ||
+               c == '\r';
+      };
+      while (it != end) {
+        auto next_it = std::find_if(it, end, is_sep);
+        tokens.emplace_back(it, next_it);
+        it = next_it;
+        if (it != end) {
+          ++it;
+        }
+      }
 
-      for (std::vector<std::string>::iterator it = tokens.begin();
-           it != tokens.end(); ++it) {
+      for (const auto &token : tokens) {
 #if (LLVM_VERSION) >= 40
-        if (sscanf(it->c_str(), "flush_shadow=%d", &flush_shadow))
+        if (sscanf(token.c_str(), "flush_shadow=%d", &flush_shadow))
           continue;
 #endif
-        if (sscanf(it->c_str(), "print_max_rss=%d", &print_max_rss))
+        if (sscanf(token.c_str(), "print_max_rss=%d", &print_max_rss))
           continue;
-        if (sscanf(it->c_str(), "verbose=%d", &verbose))
+        if (sscanf(token.c_str(), "verbose=%d", &verbose))
           continue;
-        if (sscanf(it->c_str(), "report_data_leak=%d", &report_data_leak))
+        if (sscanf(token.c_str(), "report_data_leak=%d", &report_data_leak))
           continue;
-        if (sscanf(it->c_str(), "enable=%d", &enabled))
+        if (sscanf(token.c_str(), "enable=%d", &enabled))
           continue;
-        if (sscanf(it->c_str(), "tasking=%d", &tasking))
+        if (sscanf(token.c_str(), "tasking=%d", &tasking))
           continue;
-        if (sscanf(it->c_str(), "ignore_serial=%d", &ignore_serial))
+        if (sscanf(token.c_str(), "ignore_serial=%d", &ignore_serial))
           continue;
         std::cerr << "Illegal values for ARCHER_OPTIONS variable: " << token
                   << std::endl;
