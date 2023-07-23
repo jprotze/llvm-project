@@ -74,6 +74,7 @@ void __tsan_vptr_update(void **vptr_p, void *new_val);
 
 SANITIZER_INTERFACE_ATTRIBUTE void __tsan_func_entry(void *call_pc);
 SANITIZER_INTERFACE_ATTRIBUTE void __tsan_func_exit();
+SANITIZER_INTERFACE_ATTRIBUTE void __tsan_func_exit_pc(void *call_pc);
 
 SANITIZER_INTERFACE_ATTRIBUTE void __tsan_ignore_thread_begin();
 SANITIZER_INTERFACE_ATTRIBUTE void __tsan_ignore_thread_end();

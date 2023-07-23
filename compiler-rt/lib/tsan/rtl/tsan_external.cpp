@@ -68,8 +68,8 @@ void ExternalAccess(void *addr, uptr caller_pc, void *tag, AccessType typ) {
   bool in_ignored_lib;
   if (!caller_pc || !libignore()->IsIgnored(caller_pc, &in_ignored_lib))
     MemoryAccess(thr, CALLERPC, (uptr)addr, 1, typ);
-  FuncExit(thr);
-  if (caller_pc) FuncExit(thr);
+  FuncExit(thr, (uptr)&registered_tags[(uptr)tag]);
+  if (caller_pc) FuncExit(thr, caller_pc);
 }
 
 extern "C" {

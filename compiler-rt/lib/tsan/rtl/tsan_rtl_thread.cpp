@@ -361,6 +361,8 @@ void FiberDestroy(ThreadState *thr, uptr pc, ThreadState *fiber) {
 
 void FiberSwitch(ThreadState *thr, uptr pc,
                  ThreadState *fiber, unsigned flags) {
+  if (thr == fiber)
+    return;
   if (!(flags & FiberSwitchFlagNoSync))
     Release(thr, pc, (uptr)fiber);
   FiberSwitchImpl(thr, fiber);

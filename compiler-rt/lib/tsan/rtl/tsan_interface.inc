@@ -168,6 +168,7 @@ void __tsan_vptr_read(void **vptr_p) {
 void __tsan_func_entry(void *pc) { FuncEntry(cur_thread(), STRIP_PAC_PC(pc)); }
 
 void __tsan_func_exit() { FuncExit(cur_thread()); }
+void __tsan_func_exit_pc(void *pc) { FuncExit(cur_thread(), STRIP_PAC_PC(pc)); }
 
 void __tsan_ignore_thread_begin() { ThreadIgnoreBegin(cur_thread(), CALLERPC); }
 
