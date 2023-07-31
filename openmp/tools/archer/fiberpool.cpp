@@ -32,6 +32,12 @@ static int (*__tsan_get_fiber_stacksize)(void *fiber);
 static std::atomic<int> pagesize{4096};
 static std::atomic<int> fibers{0};
 
+#ifdef DEBUG_FIBER
+#define DEBUG_FIBER_INFO_ARGS(f,l) ,f,l
+#else
+#define DEBUG_FIBER_INFO_ARGS(f,l)
+#endif
+
 class FiberFlags {
 public:
   int lazy{0};
@@ -198,20 +204,17 @@ public:
   static __thread FiberData *currentFiber;
   void *fiber{nullptr};
   bool isThreadFiber{false};
-  std::string switchFile{}, createFile{};
+#ifdef DEBUG_FIBER
+  const char *switchFile=NULL, *createFile=NULL;
   int switchLine{0}, createLine{0};
+#endif
 
   void SwitchToFiber(unsigned flags, const char* file, int line) override {
-    switchFile = std::string{file};
+#ifdef DEBUG_FIBER
+    switchFile = file;
     switchLine = line;
-    if (!fiber) {
-      if (flags)
-        TsanIgnoreSyncBegin();
-      fiber = __tsan_create_fiber(flags);
-      fibers++;
-      if (flags)
-        TsanIgnoreSyncEnd();
-    }
+#endif
+    assert(fiber);
     __tsan_switch_to_fiber(fiber, flags);
     currentFiber = this;
   }
@@ -223,9 +226,6 @@ public:
   }
   static FiberData *getCurrentFiber() {
     assert(currentFiber);
-    /*if (!currentFiber) {
-      currentFiber = FiberData::New(__tsan_get_current_fiber());
-    }*/
     return currentFiber;
   }
 
@@ -238,9 +238,6 @@ public:
     return this;
   }
   FiberData *Init(unsigned flags, const char* file, int line) {
-    return Init(flags, std::string{file}, line);
-  }
-  FiberData *Init(unsigned flags, std::string file, int line) {
     if (!fiber || isThreadFiber) {
       isThreadFiber = false;
       if (flags)
@@ -250,22 +247,23 @@ public:
       if (flags)
         TsanIgnoreSyncEnd();
     }
+#ifdef DEBUG_FIBER
     createFile = file;
     createLine = line;
+#endif
     return this;
   }
 
   void Reset() {
-    createFile = "";
+#ifdef DEBUG_FIBER
+    createFile = NULL;
     createLine = 0;
-    switchFile = "";
+    switchFile = NULL;
     switchLine = 0;
+#endif
   }
 
-  static FiberData *New(unsigned flags, std::string file, int line) {
-    return DataPoolEntry<FiberData>::New()->Init(flags, file, line);
-  }
-  static FiberData *New(unsigned flags, const char* file, int line) {
+  static FiberData *New(unsigned flags, const char* file = NULL, int line = 0) {
     return DataPoolEntry<FiberData>::New()->Init(flags, file, line);
   }
   static FiberData *New(void *newFiber) {
@@ -292,19 +290,23 @@ private:
   FiberData *fiber{nullptr};
   bool isThreadFiber{false};
   std::string name{};
-  std::string switchFile{}, createFile{};
+#ifdef DEBUG_FIBER
+  const char *switchFile = NULL, *createFile = NULL;
   int switchLine{0}, createLine{0};
+#endif
 
 public:
   static __thread LazyFiberData *currentFiber;
 
   void SwitchToFiber(unsigned flags, const char* file, int line) override {
-    switchFile = std::string{file};
+#ifdef DEBUG_FIBER
+    switchFile = file;
     switchLine = line;
+#endif
     assert(!fiber_flags->direct && fiber_flags->lazy);
     bool isNew{false};
     if (!fiber) {
-      fiber = FiberData::New(flags, createFile, createLine);
+      fiber = FiberData::New(flags DEBUG_FIBER_INFO_ARGS(createFile, createLine));
       if (!name.empty())
         fiber->SetFiberName(name.c_str());
       isNew = true;
@@ -328,9 +330,6 @@ public:
   static LazyFiberData *getCurrentFiber() {
     assert(!fiber_flags->direct && fiber_flags->lazy);
     assert(currentFiber);
-    /*if (!currentFiber) {
-      currentFiber = LazyFiberData::New(FiberData::getCurrentFiber());
-    }*/
     return currentFiber;
   }
 
@@ -347,8 +346,10 @@ public:
     assert(!fiber_flags->direct && fiber_flags->lazy);
     //    this->flags = flags;
     TsanHappensBeforeStore(&fiber);
-    createFile = std::string{file};
+#ifdef DEBUG_FIBER
+    createFile = file;
     createLine = line;
+#endif
     return this;
   }
 
@@ -360,10 +361,12 @@ public:
       fiber->Delete();
     }
     fiber = nullptr;
-    createFile = "";
+#ifdef DEBUG_FIBER
+    createFile = NULL;
     createLine = 0;
-    switchFile = "";
+    switchFile = NULL;
     switchLine = 0;
+#endif
     isThreadFiber = false;
   }
 
@@ -392,19 +395,25 @@ __thread LazyTsanFiberDataPool *LazyTsanFiberDataPool::ThreadDataPool = nullptr;
 class LazyTsanFiberData final : public DataPoolEntry<LazyTsanFiberData> {
 private:
   unsigned flags{0};
+#ifndef NDEBUG
   int marker{0};
+#endif
   void *fiber{nullptr};
   bool isThreadFiber{false};
   std::string name{};
-  std::string switchFile{}, createFile{};
+#ifdef DEBUG_FIBER
+  const char *switchFile = NULL, *createFile = NULL;
   int switchLine{0}, createLine{0};
+#endif
 
 public:
   static __thread LazyTsanFiberData *currentFiber;
 
   void SwitchToFiber(unsigned flags, const char* file, int line) override {
-    switchFile = std::string{file};
+#ifdef DEBUG_FIBER
+    switchFile = file;
     switchLine = line;
+#endif
     assert(fiber_flags->direct && fiber_flags->lazy);
     assert(marker==0xdeadbeef);
     bool isNew{false};
@@ -422,7 +431,6 @@ public:
     __tsan_switch_to_fiber(fiber, flags);
     if (isNew && !this->flags)
       TsanHappensAfterStore(&fiber);
-    //printf("SwitchLazyTsanFiber(%s:%i) @%p->%p\n", file, line, this, currentFiber);
     currentFiber = this;
   }
   void SetFiberName(const char *name) override {
@@ -442,54 +450,55 @@ public:
     assert(fiber_flags->direct && fiber_flags->lazy);
     assert(currentFiber);
     assert(currentFiber->marker==0xdeadbeef);
-    /*if (!currentFiber) {
-      currentFiber = LazyTsanFiberData::New(__tsan_get_current_fiber());
-    } else {
-      assert(currentFiber->fiber == __tsan_get_current_fiber());
-    }*/
     return currentFiber;
   }
 
   LazyTsanFiberData *Init(void* newFiber) {
     assert(fiber_flags->direct && fiber_flags->lazy);
+#ifndef NDEBUG
     marker = 0xdeadbeef;
+#endif
     assert(!fiber);
-    /*if (fiber) {
-      __tsan_destroy_fiber(fiber);
-    }*/
     isThreadFiber = true;
     fiber = newFiber;
     return this;
   }
   LazyTsanFiberData *Init(unsigned flags, const char* file, int line) {
     assert(fiber_flags->direct && fiber_flags->lazy);
+#ifndef NDEBUG
     marker = 0xdeadbeef;
+#endif
     assert(!fiber);
     this->flags = flags;
-    createFile = std::string{file};
+#ifdef DEBUG_FIBER
+    createFile = file;
     createLine = line;
+#endif
     if (!flags)
       TsanHappensBeforeStore(&fiber);
-    //printf("CreateLazyTsanFiber(%s:%i) @%p\n", file, line, this);
     return this;
   }
 
   void Reset() {
     assert(fiber_flags->direct && fiber_flags->lazy);
+#ifndef NDEBUG
     assert(marker==0xdeadbeef);
-    //    flags = 0;
-    name.clear();
     marker=0;
+#endif
+    flags = 0;
+    name.clear();
     if (fiber != nullptr) {
       if (!isThreadFiber)
         __tsan_destroy_fiber(fiber);
       fiber = nullptr;
       isThreadFiber = false;
     }
-    createFile = "";
+#ifdef DEBUG_FIBER
+    createFile = NULL;
     createLine = 0;
-    switchFile = "";
+    switchFile = NULL;
     switchLine = 0;
+#endif
   }
 
   static LazyTsanFiberData *New(unsigned flags, const char* file, int line) {
@@ -666,6 +675,7 @@ extern "C" void __pool_init() {
     } else {
       LazyFiberDataPool::ThreadDataPool = new LazyFiberDataPool;
       if (!LazyFiberData::currentFiber) {
+        FiberData::currentFiber = FiberData::New(__tsan_get_current_fiber());
         LazyFiberData::currentFiber = LazyFiberData::New(FiberData::getCurrentFiber());
       }
     }
