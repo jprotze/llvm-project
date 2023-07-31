@@ -65,6 +65,7 @@ public:
   int report_data_leak{0};
   int ignore_serial{0};
   int tasking{0};
+  int stack_size{1024};
   std::atomic<int> untieds{0};
 
   ArcherFlags(const char *env) {
@@ -100,6 +101,8 @@ public:
         if (sscanf(token.c_str(), "enable=%d", &enabled))
           continue;
         if (sscanf(token.c_str(), "tasking=%d", &tasking))
+          continue;
+        if (sscanf(token.c_str(), "stack_size=%d", &stack_size))
           continue;
         if (sscanf(token.c_str(), "ignore_serial=%d", &ignore_serial))
           continue;
@@ -1068,7 +1071,8 @@ static void ompt_tsan_task_schedule(ompt_data_t *first_task_data,
       } while (ret_task_memory);
     }
     if (archer_flags->tasking) {
-      TsanNewMemory((char*)__builtin_frame_address(0)-1024, 1024);
+      auto stack_size = archer_flags->stack_size;
+      TsanNewMemory((char*)__builtin_frame_address(0)-stack_size, stack_size);
     }
     ToTask->execution++;
     // 1. Task will begin execution after it has been created.
