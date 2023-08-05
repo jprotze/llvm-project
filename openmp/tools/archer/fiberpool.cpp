@@ -287,6 +287,7 @@ __thread LazyFiberDataPool *LazyFiberDataPool::ThreadDataPool = nullptr;
 /// Data structure to lazily wrap a TSan fiber.
 class LazyFiberData final : public DataPoolEntry<LazyFiberData> {
 private:
+  unsigned flags{0};
   FiberData *fiber{nullptr};
   bool isThreadFiber{false};
   std::string name{};
@@ -312,7 +313,7 @@ public:
       isNew = true;
     }
     fiber->SwitchToFiber(flags, file, line);
-    if (isNew)
+    if (isNew && !this->flags)
       TsanHappensAfterStore(&fiber);
     currentFiber = this;
   }
@@ -344,8 +345,9 @@ public:
   }
   LazyFiberData *Init(unsigned flags, const char* file, int line) {
     assert(!fiber_flags->direct && fiber_flags->lazy);
-    //    this->flags = flags;
-    TsanHappensBeforeStore(&fiber);
+    this->flags = flags;
+    if (!flags)
+      TsanHappensBeforeStore(&fiber);
 #ifdef DEBUG_FIBER
     createFile = file;
     createLine = line;
@@ -355,7 +357,7 @@ public:
 
   void Reset() {
     assert(!fiber_flags->direct && fiber_flags->lazy);
-    //    flags = 0;
+    flags = 0;
     name.clear();
     if (fiber != nullptr && !isThreadFiber) {
       fiber->Delete();
