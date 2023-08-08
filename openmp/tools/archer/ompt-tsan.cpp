@@ -19,6 +19,7 @@
 #include <cassert>
 #include <cstdlib>
 #include <cstring>
+#include <dlfcn.h>
 #include <inttypes.h>
 #include <iostream>
 #include <list>
@@ -29,10 +30,9 @@
 #include <unistd.h>
 #include <unordered_map>
 #include <vector>
-#include <dlfcn.h>
 
-#include "omp-tools.h"
 #include "fiberpool.h"
+#include "omp-tools.h"
 
 // Define attribute that indicates that the fall through from the previous
 // case label is intentional and should not be diagnosed by a compiler
@@ -148,7 +148,7 @@ public:
 };
 
 static ArcherFlags *archer_flags;
-} // namespace
+} // namespace __archer
 
 #if (LLVM_VERSION) >= 40
 extern "C" {
@@ -457,9 +457,7 @@ struct Taskgroup final : DataPoolEntry<Taskgroup> {
   Taskgroup(DataPool<Taskgroup> *dp) : DataPoolEntry<Taskgroup>(dp) {}
 };
 
-enum ArcherTaskFlag{
-  ArcherTaskFulfilled = 0x00010000
-};
+enum ArcherTaskFlag { ArcherTaskFulfilled = 0x00010000 };
 
 struct TaskData;
 typedef DataPool<TaskData> TaskDataPool;
@@ -487,9 +485,9 @@ struct TaskData final : DataPoolEntry<TaskData> {
   int execution{0};
 
   size_t PrivateDataSize{0};
-  void* PrivateDataAddr{nullptr};
+  void *PrivateDataAddr{nullptr};
 
-  const void* CodePtr{nullptr};
+  const void *CodePtr{nullptr};
   /// Count how often this structure has been put into child tasks + 1.
   std::atomic_int RefCount{1};
 
@@ -528,9 +526,7 @@ struct TaskData final : DataPoolEntry<TaskData> {
     if (Fiber)
       TsanSwitchToFiber(Fiber, 1);
   }
-  void deactivate() {
-    assert(!Fiber || Fiber == TsanGetCurrentFiber());
-  }
+  void deactivate() { assert(!Fiber || Fiber == TsanGetCurrentFiber()); }
   bool isIncluded() { return TaskType & ompt_task_undeferred; }
   bool isUntied() { return TaskType & ompt_task_untied; }
   bool isFinal() { return TaskType & ompt_task_final; }
@@ -549,7 +545,7 @@ struct TaskData final : DataPoolEntry<TaskData> {
 
   void *GetTaskwaitPtr() { return &Taskwait; }
 
-  TaskData *Init(TaskData *parent, int taskType, const void* codePtr) {
+  TaskData *Init(TaskData *parent, int taskType, const void *codePtr) {
     CodePtr = codePtr;
     TaskType = taskType;
     Parent = parent;
@@ -606,7 +602,8 @@ struct TaskData final : DataPoolEntry<TaskData> {
 #endif
   }
 
-  static TaskData *New(TaskData *parent, int taskType, const void *codePtr=nullptr) {
+  static TaskData *New(TaskData *parent, int taskType,
+                       const void *codePtr = nullptr) {
     return DataPoolEntry<TaskData>::New()->Init(parent, taskType, codePtr);
   }
 
@@ -618,9 +615,10 @@ struct TaskData final : DataPoolEntry<TaskData> {
 };
 
 static inline TaskData *ToTaskData(ompt_data_t *task_data) {
-  return reinterpret_cast<TaskData *>(task_data->ptr);
+  if (task_data)
+    return reinterpret_cast<TaskData *>(task_data->ptr);
+  return nullptr;
 }
-
 
 /// Store a mutex for each wait_id to resolve race condition with callbacks.
 static std::unordered_map<ompt_wait_id_t, std::mutex> Locks;
@@ -643,8 +641,9 @@ static void ompt_tsan_thread_begin(ompt_thread_t thread_type,
   if (archer_flags->tasking) {
     TsanFiberPoolInit();
     /*__fiber::FiberDataPool::ThreadDataPool = new __fiber::FiberDataPool;
-    TsanNewMemory(__fiber::FiberDataPool::ThreadDataPool, sizeof(__fiber::FiberDataPool::ThreadDataPool));
-    if (!__fiber::FiberData::currentFiber) {
+    TsanNewMemory(__fiber::FiberDataPool::ThreadDataPool,
+    sizeof(__fiber::FiberDataPool::ThreadDataPool)); if
+    (!__fiber::FiberData::currentFiber) {
       __fiber::FiberData::currentFiber = TsanGetCurrentFiber();
     }*/
   }
@@ -892,7 +891,8 @@ static void ompt_tsan_task_create(
 
     Data = TaskData::New(PData, type);
     new_task_data->ptr = Data;
-  } else if (type & ompt_task_explicit || type & ompt_task_target) {
+  } else if (type & ompt_task_explicit || type & ompt_task_target ||
+             type & ompt_task_taskwait) {
     Data = TaskData::New(ToTaskData(parent_task_data), type, codeptr_ra);
     new_task_data->ptr = Data;
     if (!Data->isIncluded()) {
@@ -904,7 +904,8 @@ static void ompt_tsan_task_create(
     }
   }
   if (archer_flags->tasking && Data->isUntied() && !archer_flags->untieds++)
-    fprintf(stderr, "Archer Warning: Task-level analysis not yet supported for untied tasks\n");
+    fprintf(stderr, "Archer Warning: Task-level analysis not yet supported for "
+                    "untied tasks\n");
 }
 
 static void freeTask(TaskData *task) {
@@ -927,6 +928,53 @@ static void acquireDependencies(TaskData *task) {
   }
 }
 
+static void completeTask(TaskData *FromTask, ompt_task_status_t Status,
+                         TaskData *ToTask) {
+  if (!FromTask)
+    return;
+  // Task-end happens after a possible omp_fulfill_event call
+  if (FromTask->isFulfilled())
+    TsanHappensAfter(FromTask->GetTaskPtr());
+  // Included tasks are executed sequentially, no need to track
+  // synchronization
+  if (!FromTask->isIncluded()) {
+    // Task will finish before a barrier in the surrounding parallel region
+    // ...
+    ParallelData *PData = FromTask->Team;
+    TsanHappensBefore(
+        PData->GetBarrierPtr(FromTask->ImplicitTask->BarrierIndex));
+
+    // ... and before an eventual taskwait by the parent thread.
+    TsanHappensBefore(FromTask->Parent->GetTaskwaitPtr());
+
+    if (FromTask->TaskGroup != nullptr) {
+      // This task is part of a taskgroup, so it will finish before the
+      // corresponding taskgroup_end.
+      TsanHappensBefore(FromTask->TaskGroup->GetPtr());
+    }
+  }
+
+  // release dependencies
+  releaseDependencies(FromTask);
+}
+static void switchTasks(TaskData *FromTask, TaskData *ToTask) {
+  if (FromTask)
+    FromTask->deactivate();
+  if (ToTask)
+    ToTask->activate();
+}
+static void endTask(TaskData *FromTask, ompt_task_status_t Status,
+                    TaskData *ToTask) {
+  if (!FromTask)
+    return;
+  if (ompt_get_task_memory) {
+    if (FromTask->PrivateDataSize > 0)
+      TsanNewMemory((/*(void**)*/ FromTask->PrivateDataAddr),
+                    FromTask->PrivateDataSize + 8);
+  }
+  TsanFuncExit();
+}
+
 static void ompt_tsan_task_schedule(ompt_data_t *first_task_data,
                                     ompt_task_status_t prior_task_status,
                                     ompt_data_t *second_task_data) {
@@ -940,6 +988,9 @@ static void ompt_tsan_task_schedule(ompt_data_t *first_task_data,
   //    ompt_task_late_fulfill  = 6,
   //     -> first completed, first freed, second ignored
   //
+  //    ompt_taskwait_complete = 8,
+  //     -> first starts, first completes, first freed, second ignored
+  //
   //    ompt_task_complete      = 1,
   //    ompt_task_cancel        = 3,
   //     -> first completed, first freed, second starts
@@ -951,90 +1002,67 @@ static void ompt_tsan_task_schedule(ompt_data_t *first_task_data,
   //
 
   TaskData *FromTask = ToTaskData(first_task_data);
+  TaskData *ToTask = ToTaskData(second_task_data);
 
-  if (prior_task_status == ompt_task_early_fulfill){
+  if (prior_task_status == ompt_task_early_fulfill) {
     // the omp_fulfill_event call happens before the task can complete
     TsanHappensBefore(FromTask->GetTaskPtr());
     FromTask->setFulfilled();
     return;
   }
 
+  // The late fulfill happens after the detached task finished execution
+  if (prior_task_status == ompt_task_late_fulfill)
+    TsanHappensAfter(FromTask->GetTaskPtr());
+
+  if (prior_task_status == ompt_taskwait_complete)
+    acquireDependencies(FromTask);
+
+
   // Legacy handling for missing reduction callback
-  if (hasReductionCallback < ompt_set_always && FromTask->InBarrier) {
+  if (hasReductionCallback < ompt_set_always && FromTask &&
+      FromTask->InBarrier) {
     // We want to ignore writes in the runtime code during barriers,
     // but not when executing tasks with user code!
     TsanIgnoreWritesEnd();
   }
 
-  // The late fulfill happens after the detached task finished execution
-  if (prior_task_status == ompt_task_late_fulfill)
-    TsanHappensAfter(FromTask->GetTaskPtr());
-
   // task completed execution
   if (prior_task_status == ompt_task_complete ||
       prior_task_status == ompt_task_cancel ||
       prior_task_status == ompt_task_late_fulfill) {
-    // Task-end happens after a possible omp_fulfill_event call
-    if (FromTask->isFulfilled())
-      TsanHappensAfter(FromTask->GetTaskPtr());
-    // Included tasks are executed sequentially, no need to track
-    // synchronization
-    if (!FromTask->isIncluded()) {
-      // Task will finish before a barrier in the surrounding parallel region
-      // ...
-      ParallelData *PData = FromTask->Team;
-      TsanHappensBefore(
-          PData->GetBarrierPtr(FromTask->ImplicitTask->BarrierIndex));
 
-      // ... and before an eventual taskwait by the parent thread.
-      TsanHappensBefore(FromTask->Parent->GetTaskwaitPtr());
-
-      if (FromTask->TaskGroup != nullptr) {
-        // This task is part of a taskgroup, so it will finish before the
-        // corresponding taskgroup_end.
-        TsanHappensBefore(FromTask->TaskGroup->GetPtr());
-      }
-    }
-
-    // release dependencies
-    releaseDependencies(FromTask);
-    if (ompt_get_task_memory) {
-/*      void *addr;
-      size_t size;
-      int ret_task_memory = 0, block = 0;
-      do {
-        size=0;
-        ret_task_memory = ompt_get_task_memory(&addr, &size, block++);
-        if (size>0) {
-          TsanNewMemory(((void**)addr), size+8);
-
-        }
-      } while (ret_task_memory);*/
-      if (FromTask->PrivateDataSize>0)
-        TsanNewMemory((/*(void**)*/FromTask->PrivateDataAddr), FromTask->PrivateDataSize+8);
-    }
-    if (prior_task_status != ompt_task_late_fulfill) {
-      TsanFuncExit();
-      FromTask->deactivate();
-      ToTaskData(second_task_data)
-          ->activate(); // must switch to next task before deleting the previous
-    }
-    // free the previously running task
-    freeTask(FromTask);
-  } else {
-    if(prior_task_status == ompt_task_detach) {
-      TsanFuncExit();
-    }
-    FromTask->deactivate();
-    ToTaskData(second_task_data)->activate(); 
+    completeTask(FromTask, prior_task_status, ToTask);
   }
 
-  // For late fulfill of detached task, there is no task to schedule to
-  if (prior_task_status == ompt_task_late_fulfill) {
+  if (prior_task_status == ompt_task_complete ||
+      prior_task_status == ompt_task_cancel ||
+      prior_task_status == ompt_task_detach) {
+
+    endTask(FromTask, prior_task_status, ToTask);
+  }
+
+  if (prior_task_status == ompt_task_complete ||
+      prior_task_status == ompt_task_cancel ||
+      prior_task_status == ompt_task_detach ||
+      prior_task_status == ompt_task_switch ||
+      prior_task_status == ompt_task_yield) {
+    // must switch to next task before deleting the previous
+    switchTasks(FromTask, ToTask);
+  }
+
+  if (prior_task_status == ompt_task_complete ||
+      prior_task_status == ompt_task_cancel ||
+      prior_task_status == ompt_task_late_fulfill ||
+      prior_task_status == ompt_taskwait_complete) {
+    // free the previously running task
+    freeTask(FromTask);
+  }
+
+  if (!ToTask) {
     return;
   }
 
-  TaskData *ToTask = ToTaskData(second_task_data);
   // Legacy handling for missing reduction callback
   if (hasReductionCallback < ompt_set_always && ToTask->InBarrier) {
     // We re-enter runtime code which currently performs a barrier.
@@ -1058,25 +1086,27 @@ static void ompt_tsan_task_schedule(ompt_data_t *first_task_data,
     if (ompt_get_task_memory) {
       void *addr;
       size_t size;
-      int ret_task_memory = 0, block=0;
+      int ret_task_memory = 0, block = 0;
       do {
-        size=0;
+        size = 0;
         ret_task_memory = ompt_get_task_memory(&addr, &size, block++);
-        if (size>0){
-          TsanNewMemory((/*(void**)*/addr), size+8);
+        if (size > 0) {
+          TsanNewMemory((/*(void**)*/ addr), size + 8);
           ToTask->PrivateDataAddr = addr;
           ToTask->PrivateDataSize = size;
-//          printf("NewMemory(%p, %zu)\n",addr, size);
+          //          printf("NewMemory(%p, %zu)\n",addr, size);
         }
       } while (ret_task_memory);
     }
     if (archer_flags->tasking) {
       auto stack_size = archer_flags->stack_size;
-      TsanNewMemory((char*)__builtin_frame_address(0)-stack_size, stack_size);
+      TsanNewMemory((char *)__builtin_frame_address(0) - stack_size,
+                    stack_size);
     }
     ToTask->execution++;
     // 1. Task will begin execution after it has been created.
-    TsanHappensAfter(ToTask->GetTaskPtr()); // TODO: after creation, reset clock to creation
+    TsanHappensAfter(
+        ToTask->GetTaskPtr()); // TODO: after creation, reset clock to creation
     acquireDependencies(ToTask);
   } else {
     // 2. Task will resume after it has been switched away.
@@ -1139,7 +1169,7 @@ static void ompt_tsan_mutex_released(ompt_mutex_t kind, ompt_wait_id_t wait_id,
   Lock.unlock();
 }
 
-} // namespace
+} // namespace __archer
 
 // callback , signature , variable to store result , required support level
 #define SET_OPTIONAL_CALLBACK_T(event, type, result, level)                    \
@@ -1280,11 +1310,11 @@ ompt_start_tool(unsigned int omp_version, const char *runtime_version) {
   if (__archer::archer_flags->verbose) {
     if (__archer::archer_flags->tasking)
       std::cout << "Archer detected OpenMP application with TSan, supplying "
-                  "OpenMP tasking synchronization semantics"
+                   "OpenMP tasking synchronization semantics"
                 << std::endl;
     else
       std::cout << "Archer detected OpenMP application with TSan, supplying "
-                  "OpenMP synchronization semantics"
+                   "OpenMP synchronization semantics"
                 << std::endl;
   }
   return &ompt_start_tool_result;
