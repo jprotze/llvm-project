@@ -53,18 +53,21 @@ bool OnReport(const ReportDesc *rep, bool suppressed) {
   static bool tried = false;
   (void)rep;
   if (!tried) {
+    cur_thread()->ignore_interceptors++;
     tried = true;
 #  if (defined __APPLE__) || (defined __MACH__)
-    dlerror();
+    //dlerror();
     f = (OnReportFp)dlsym(RTLD_DEFAULT, "TsanOnReport");
-    dlerror();
+    //dlerror();
 #  elif (defined __linux__) || (defined linux) || (defined __linux)
-    dlerror();
+    //dlerror();
     f = (OnReportFp)dlsym(RTLD_NEXT, "TsanOnReport");
-    dlerror();
+    //dlerror();
 #  else
+    cur_thread()->ignore_interceptors--;
     return suppressed;
 #  endif
+    cur_thread()->ignore_interceptors--;
   }
   if (f)
     return (*f)(rep, suppressed, LLVM_VERSION_MAJOR);
