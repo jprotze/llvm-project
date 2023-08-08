@@ -30,18 +30,17 @@ namespace __tsan {
 class ScopedAnnotation {
  public:
   ScopedAnnotation(ThreadState *thr, const char *aname, uptr pc)
-      : thr_(thr), pc_(pc) {
+      : thr_(thr) {
     FuncEntry(thr_, pc);
     DPrintf("#%d: annotation %s()\n", thr_->tid, aname);
   }
 
   ~ScopedAnnotation() {
-    FuncExit(thr_, pc_);
+    FuncExit(thr_);
     CheckedMutex::CheckNoLocks();
   }
  private:
   ThreadState *const thr_;
-  uptr pc_;
 };
 
 #define SCOPED_ANNOTATION_RET(typ, ret)                     \

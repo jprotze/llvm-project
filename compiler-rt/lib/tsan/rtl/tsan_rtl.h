@@ -763,7 +763,7 @@ void TraceMutexLock(ThreadState *thr, EventType type, uptr pc, uptr addr,
 void TraceMutexUnlock(ThreadState *thr, uptr addr);
 void TraceTime(ThreadState *thr);
 
-void TraceRestartFuncExit(ThreadState *thr, uptr pc);
+void TraceRestartFuncExit(ThreadState *thr);
 void TraceRestartFuncEntry(ThreadState *thr, uptr pc);
 
 void GrowShadowStack(ThreadState *thr);
@@ -785,13 +785,10 @@ void FuncEntry(ThreadState *thr, uptr pc) {
 }
 
 ALWAYS_INLINE
-void FuncExit(ThreadState *thr, uptr pc=0) {
-  if(pc) {
-    CHECK_EQ(thr->shadow_stack_pos[-1], pc);
-  }
+void FuncExit(ThreadState *thr) {
   DPrintf2("#%d: FuncExit\n", (int)thr->fast_state.sid());
   if (UNLIKELY(!TryTraceFunc(thr, 0)))
-    return TraceRestartFuncExit(thr, pc);
+    return TraceRestartFuncExit(thr);
   DCHECK_GT(thr->shadow_stack_pos, thr->shadow_stack);
 #if !SANITIZER_GO
   DCHECK_LT(thr->shadow_stack_pos, thr->shadow_stack_end);

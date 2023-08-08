@@ -23,7 +23,6 @@ class ScopedInterceptor {
   ThreadState *const thr_;
   bool in_ignored_lib_;
   bool ignoring_;
-  uptr pc_;
 
   void DisableIgnoresImpl();
   void EnableIgnoresImpl();

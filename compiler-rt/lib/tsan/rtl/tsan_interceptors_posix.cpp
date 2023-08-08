@@ -245,14 +245,14 @@ static ThreadSignalContext *SigCtx(ThreadState *thr) {
 
 ScopedInterceptor::ScopedInterceptor(ThreadState *thr, const char *fname,
                                      uptr pc)
-    : thr_(thr), in_ignored_lib_(false), ignoring_(false), pc_(pc) {
+    : thr_(thr), in_ignored_lib_(false), ignoring_(false) {
   LazyInitialize(thr);
   if (!thr_->is_inited) return;
+  if (!thr_->ignore_interceptors) FuncEntry(thr, pc);
   DPrintf("#%d: intercept %s()\n", thr_->tid, fname);
   ignoring_ =
       !thr_->in_ignored_lib && (flags()->ignore_interceptors_accesses ||
                                 libignore()->IsIgnored(pc, &in_ignored_lib_));
-  if (!thr_->ignore_interceptors && !ignoring_) FuncEntry(thr, pc);
   EnableIgnores();
 }
 
@@ -261,8 +261,7 @@ ScopedInterceptor::~ScopedInterceptor() {
   DisableIgnores();
   if (!thr_->ignore_interceptors) {
     ProcessPendingSignals(thr_);
-    if (!ignoring_)
-      FuncExit(thr_, pc_);
+    FuncExit(thr_);
     CheckedMutex::CheckNoLocks();
   }
 }
@@ -393,7 +392,7 @@ static void at_exit_callback_installed_at() {
   Acquire(thr, ctx->pc, (uptr)ctx);
   FuncEntry(thr, ctx->pc);
   ((void(*)())ctx->f)();
-  FuncExit(thr, ctx->pc);
+  FuncExit(thr);
   Free(ctx);
 }
 
@@ -403,7 +402,7 @@ static void cxa_at_exit_callback_installed_at(void *arg) {
   Acquire(thr, ctx->pc, (uptr)arg);
   FuncEntry(thr, ctx->pc);
   ((void(*)(void *arg))ctx->f)(ctx->arg);
-  FuncExit(thr, ctx->pc);
+  FuncExit(thr);
   Free(ctx);
 }
 
@@ -469,7 +468,7 @@ static void on_exit_callback_installed_at(int status, void *arg) {
   Acquire(thr, ctx->pc, (uptr)arg);
   FuncEntry(thr, ctx->pc);
   ((void(*)(int status, void *arg))ctx->f)(status, ctx->arg);
-  FuncExit(thr, ctx->pc);
+  FuncExit(thr);
   Free(ctx);
 }
 

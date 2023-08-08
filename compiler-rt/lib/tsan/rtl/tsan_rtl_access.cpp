@@ -97,9 +97,9 @@ NOINLINE void TraceRestartFuncEntry(ThreadState* thr, uptr pc) {
   FuncEntry(thr, pc);
 }
 
-NOINLINE void TraceRestartFuncExit(ThreadState* thr, uptr pc) {
+NOINLINE void TraceRestartFuncExit(ThreadState* thr) {
   TraceSwitchPart(thr);
-  FuncExit(thr, pc);
+  FuncExit(thr);
 }
 
 void TraceMutexLock(ThreadState* thr, EventType type, uptr pc, uptr addr,
