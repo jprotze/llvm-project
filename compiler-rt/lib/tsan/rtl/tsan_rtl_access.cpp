@@ -224,8 +224,6 @@ bool CheckRaces(ThreadState* thr, RawShadow* shadow_mem, Shadow cur,
   // the current access info, so we are done.
   if (LIKELY(stored))
     return false;
-  if (LIKELY(typ & kAccessRead))
-    return false;
   // Choose a random candidate slot and replace it.
   uptr index =
       atomic_load_relaxed(&thr->trace_pos) / sizeof(Event) % kShadowCnt;
@@ -348,9 +346,6 @@ STORE : {
     const int empty_mask = _mm_movemask_epi8(empty);
     index = __builtin_ffs(empty_mask);
     if (UNLIKELY(index == 0)) {
-      // If we reach here, we give up storing reads
-      if (typ & kAccessRead)
-        return false;
       index = (atomic_load_relaxed(&thr->trace_pos) / 2) % 16;
     }
   }
